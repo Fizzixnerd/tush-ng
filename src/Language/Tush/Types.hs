@@ -1,11 +1,23 @@
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Language.Tush.Types where
 
 import ClassyPrelude as CP hiding (TVar)
+
+import Unbound.Generics.LocallyNameless
+
+import GHC.Generics (Generic)
 
 import Control.Monad.Except
 import Control.Monad.State
@@ -57,7 +69,7 @@ data Token = LArrowT
            | FixT
            | BoolT Bool
            | SymbolT Symbol
-           | StringT Text
+           | StringT String
            | CommentT Text
            | PathT Path
            | IntegralT Integer
@@ -100,11 +112,11 @@ instance Stream.Stream TushTokenStream where
   type Token TushTokenStream = DToken
   type Tokens TushTokenStream = Vector DToken
   tokensToChunk _ = fromList
-  chunkToTokens _ = toList
+  chunkToTokens _ = CP.toList
   chunkLength _ = length
   chunkEmpty _ = null
   take1_ (TushTokenStream ts) = fmap TushTokenStream <$> (uncons ts)
-  takeN_ n its | n <= 0 = Just (empty, its)
+  takeN_ n its | n <= 0 = Just (CP.empty, its)
   takeN_ _ (TushTokenStream ts) | null ts = Nothing
   takeN_ n (TushTokenStream ts) = Just $ TushTokenStream <$> (splitAt n ts)
   takeWhile_ p_ (TushTokenStream ts) = TushTokenStream <$> (span p_ ts)
@@ -116,7 +128,7 @@ instance Stream.Stream TushTokenStream where
         getNewStream offset stream =
           let mNewStreamTuple = takeN_ offset stream
           in
-            maybe (empty, stream) CP.id mNewStreamTuple
+            maybe (CP.empty, stream) CP.id mNewStreamTuple
         getNewSourcePos stream old =
           let mNextToken = fst <$> take1_ stream
           in
@@ -146,64 +158,92 @@ instance Stream.Stream TushTokenStream where
     in
       (newSourcePos, unpack printedLine, newPosState)
 
-
-data Symbol = InfixS Text
-            | RegularS Text
+data Symbol = InfixS String
+            | InfixBackticksS String
+            | RegularS String
   deriving (Eq, Ord, Show)
 
-newtype Path = Path { unPath :: (Vector Text, PathType, FileType)}
-  deriving (Eq, Ord, Show)
+newtype Path = Path { unPath :: ([String], PathType, FileType)}
+  deriving (Eq, Ord, Show, Generic)
+
+instance Alpha Path
 
 data PathType = PAbs | PRel | PExec | PHome
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Show, Generic)
+
+instance Alpha PathType
 
 data FileType = FTRegular | FTDirectory
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Show, Generic)
 
-newtype Name = Name { unName :: Text }
+instance Alpha FileType
+
+newtype Name' = Name' { unName' :: Text }
   deriving (Eq, Ord, Show, IsString)
 
-data Fixity = Prefix | Infix
-  deriving (Eq, Ord, Show)
+data Fixity' = Prefix | Infix | InfixBackticks
+  deriving (Eq, Ord, Show, Generic)
 
-data V = V Name Fixity
-  deriving (Eq, Ord, Show)
+instance Alpha Fixity'
+
+instance Eq (Bind (Name Exp) Exp) where
+  (==) = aeq
+
+data V = V (Name Exp) Fixity'
+  deriving (Eq, Show, Generic)
+
+instance Alpha V
 
 data Exp
   = Var V
   | App Exp Exp
-  | Lam Name Exp
-  | Let Name Exp Exp
+  | Lam (Bind (Name Exp) Exp)
+  | Let (Bind (Name Exp) Exp) Exp
   | Lit Lit
   | If Exp Exp Exp
   | Fix Exp
-  | Op Binop Exp Exp
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Show, Typeable, Generic)
+
+instance Alpha Exp
 
 data Lit
   = LInt Integer
   | LFloat Double
   | LPath Path
-  | LString Text
+  | LString String
   | LChar Char
   | LBool Bool
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Show, Generic)
 
-data Binop = Add | Sub | Mul | Eql
-  deriving (Eq, Ord, Show)
+instance Alpha Lit
+instance Subst Exp Exp where
+  isvar (Var (V x _)) = Just (SubstName x)
+  isvar _ = Nothing
+instance Subst Exp V where
+  isvar _ = Nothing
+instance Subst Exp Fixity' where
+  isvar _ = Nothing
+instance Subst Exp Lit where
+  isvar _ = Nothing
+instance Subst Exp Path where
+  isvar _ = Nothing
+instance Subst Exp PathType where
+  isvar _ = Nothing
+instance Subst Exp FileType where
+  isvar _ = Nothing
 
 data Program = Program (Vector Dec) Exp
-  deriving (Eq, Ord, Show)
+  deriving (Show)
 
-data Dec = Dec Name Exp
-  deriving (Eq, Ord, Show)
+data Dec = Dec Name' Exp
+  deriving (Show)
 
 newtype TVar = TV Text
   deriving (Eq, Ord, Show)
 
 data Type
   = TVar TVar
-  | TCon Name
+  | TCon Name'
   | TArr Type Type
   deriving (Eq, Ord, Show)
 
@@ -213,13 +253,14 @@ data Scheme = Forall [TVar] Type
   deriving (Eq, Ord, Show)
 
 newtype Infer a
-  = Infer { unInfer :: ExceptT TypeError (ReaderT Env (StateT InferState Identity)) a }
+  = Infer { unInfer :: ExceptT TypeError (ReaderT Env (StateT InferState FreshM)) a }
   deriving ( Functor
            , Applicative
            , Monad
            , MonadReader Env
            , MonadState InferState
            , MonadError TypeError
+           , Fresh
            )
 
 data InferState = InferState { count :: Int }
@@ -228,7 +269,7 @@ data InferState = InferState { count :: Int }
 data TypeError
   = UnificationFail Type Type
   | InfiniteType TVar Type
-  | UnboundVariable Name
+  | UnboundVariable (Name Exp)
   | Ambiguous (Vector Constraint)
   | UnificationMismatch (Vector Type) (Vector Type)
   deriving (Eq, Ord, Show)
@@ -236,53 +277,53 @@ data TypeError
 newtype Constraint = Constraint { unConstraint :: (Type, Type) }
   deriving (Eq, Ord, Show)
 
-newtype Env = Env { unEnv :: Map Name Scheme }
+newtype Env = Env { unEnv :: Map (Name Exp) Scheme }
   deriving (Eq, Show)
 
 instance Semigroup Env where
-  (Env e1) <> (Env e2) = Env $ union e1 e2
+  (Env e1) <> (Env e2) = Env $ CP.union e1 e2
 
 instance Monoid Env where
   mempty = Env mempty
 
-newtype Subst = Subst (Map.Map TVar Type)
+newtype Subst' = Subst' (Map.Map TVar Type)
   deriving (Eq, Ord, Show, Semigroup, Monoid)
 
 class Substitutable a where
-  apply :: Subst -> a -> a
+  apply :: Subst' -> a -> a
   ftv   :: a -> Set TVar
 
 instance Substitutable Type where
   apply _ (TCon a)       = TCon a
-  apply (Subst s) t@(TVar a) = Map.findWithDefault t a s
-  apply s (t1 `TArr` t2) = apply s t1 `TArr` apply s t2
+  apply (Subst' s) t@(TVar a) = Map.findWithDefault t a s
+  apply s (t1 `TArr` t2) = Language.Tush.Types.apply s t1 `TArr` Language.Tush.Types.apply s t2
 
   ftv TCon{}         = mempty
-  ftv (TVar a)       = singleton a
-  ftv (t1 `TArr` t2) = ftv t1 `union` ftv t2
+  ftv (TVar a)       = CP.singleton a
+  ftv (t1 `TArr` t2) = ftv t1 `CP.union` ftv t2
 
 instance Substitutable Scheme where
-  apply (Subst s) (Forall as t)   = Forall as $ apply s' t
-    where s' = Subst $ foldr Map.delete s as
+  apply (Subst' s) (Forall as t) = Forall as $ Language.Tush.Types.apply s' t
+    where s' = Subst' $ foldr Map.delete s as
   ftv (Forall as t) = ftv t \\ setFromList as
 
 instance Substitutable Constraint where
-   apply s (Constraint (t1, t2)) = Constraint (apply s t1, apply s t2)
-   ftv (Constraint (t1, t2)) = ftv t1 `union` ftv t2
+   apply s (Constraint (t1, t2)) = Constraint (Language.Tush.Types.apply s t1, Language.Tush.Types.apply s t2)
+   ftv (Constraint (t1, t2)) = ftv t1 `CP.union` ftv t2
 
 instance Substitutable a => Substitutable [a] where
-  apply = fmap . apply
-  ftv   = foldr (union . ftv) mempty
+  apply = fmap . Language.Tush.Types.apply
+  ftv   = foldr (CP.union . ftv) mempty
 
 instance Substitutable a => Substitutable (Vector a) where
-  apply = fmap . apply
-  ftv = foldr (union . ftv) mempty
+  apply = fmap . Language.Tush.Types.apply
+  ftv = foldr (CP.union . ftv) mempty
 
 instance Substitutable Env where
-  apply s (Env env) = Env $ fmap (apply s) env
+  apply s (Env env) = Env $ fmap (Language.Tush.Types.apply s) env
   ftv (Env env) = ftv $ Map.elems env
 
-newtype Unifier = Unifier { unUnifier :: (Subst, Vector Constraint) }
+newtype Unifier = Unifier { unUnifier :: (Subst', Vector Constraint) }
   deriving (Eq, Ord, Show)
 
 newtype Solve a = Solver { unSolve :: Except TypeError a }

@@ -32,7 +32,8 @@ unreservedPunctuation = fromList [ ("=", Equals)
                                  ]
 
 reservedWords :: Vector (Text, Token)
-reservedWords = fromList [ ("=>", FatRArrowT)
+reservedWords = fromList [ ("=", EqualsT)
+                         , ("=>", FatRArrowT)
                          , ("<-", LArrowT)
                          , ("->", RArrowT)
                          , ("(", LParenT)
@@ -62,20 +63,19 @@ reservedPunctuationP = foldl' (<|>) empty $ (\(s, t) -> do
 regularP :: Parsec Void Text Symbol
 regularP = RegularS <$> regularP'
 
-regularP' :: Parsec Void Text Text
+regularP' :: Parsec Void Text String
 regularP' = do
   firstChar <- letterChar
   rest <- many alphaNumChar
-  return $ pack $ firstChar `cons` rest
+  return $ firstChar : rest
 
 infixP :: Parsec Void Text Symbol
-infixP = (InfixS . concat <$> (some $ foldl' (<|>) empty $ (\(s, _) -> do
-                                                              string s) <$> unreservedPunctuation))
+infixP = (InfixS . unpack . concat <$> (some $ foldl' (<|>) empty $ string . fst <$> unreservedPunctuation))
          <|> (do
                  void $ char '`'
                  name <- regularP'
                  void $ char '`'
-                 return $ InfixS name)
+                 return $ InfixBackticksS name)
 
 symbolP :: Parsec Void Text Symbol
 symbolP = regularP <|> infixP
@@ -94,12 +94,12 @@ escapedChar = do
 unescapedChar :: Parsec Void Text Char
 unescapedChar = noneOf ['"', '\n']
 
-stringP :: Parsec Void Text Text
+stringP :: Parsec Void Text String
 stringP = do
   void $ char '"'
   s <- many $ backslashN <|> escapedChar <|> unescapedChar
   void $ char '"'
-  return $ pack s
+  return s
 
 commentP :: Parsec Void Text Text
 commentP = do
@@ -118,15 +118,14 @@ nonSpaceNonSepPrintChar = do
   notFollowedBy $ eitherP spaceChar sepChar
   printChar
 
-pathBodyP :: Parsec Void Text ((Vector Text), FileType)
+pathBodyP :: Parsec Void Text ([String], FileType)
 pathBodyP = do
   pieces <- some $ do
     void sepChar
     many nonSpaceNonSepPrintChar
-  let ft = if null $ unsafeLast pieces
-           then FTDirectory
-           else FTRegular
-  return (fromList $ pack <$> pieces, ft)
+  if null $ unsafeLast pieces
+    then return (unsafeInit pieces, FTDirectory)
+    else return (pieces, FTRegular)
 
 pathAbsP :: Parsec Void Text Path
 pathAbsP = do
@@ -168,8 +167,8 @@ tokenP :: Parsec Void Text Token
 tokenP = do
   t <- reservedPunctuationP <|>
        (PathT <$> pathP) <|>
-       (IntegralT <$> try integralP) <|>
        (FloatingT <$> try floatingP) <|>
+       (IntegralT <$> try integralP) <|>
        (SymbolT <$> symbolP) <|>
        (StringT <$> stringP) <|>
        (CommentT <$> commentP) <|>

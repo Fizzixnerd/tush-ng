@@ -1,0 +1,13 @@
+* Tush
+
+** TODO
+*** Tests
+*** Quoted paths ('[/hello there/with spaces/])
+*** ADTs (sums, products, recursive; vectors)
+*** Path polymorphism (typeclasses?)
+*** Std library
+**** Wrap ALL THE COMMANDS!
+*** Interface (use brick)
+
+** DONE
+*** Evaluator (use unbound)

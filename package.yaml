@@ -26,6 +26,8 @@ dependencies:
 - containers
 - mtl
 - vector
+- unbound-generics
+- transformers
 
 library:
   source-dirs: src
@@ -51,3 +53,4 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - tush-ng
+    - hspec

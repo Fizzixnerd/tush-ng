@@ -5,8 +5,11 @@
 
 module Language.Tush.Parse where
 
+import Unbound.Generics.LocallyNameless
+
 import Language.Tush.Types as T
 import Language.Tush.Lex (dTokensP)
+import Language.Tush.Pretty
 
 import ClassyPrelude hiding (many, some, try)
 import Text.Megaparsec as MP hiding (satisfy)
@@ -100,9 +103,10 @@ tokenP t = satisfy (== t) MP.<?> (show t)
 anyTokenP :: TushParser T.Token
 anyTokenP = satisfy (const True) MP.<?> "Any Token"
 
-symbolToName :: Symbol -> Name
-symbolToName (InfixS x) = Name x
-symbolToName (RegularS x) = Name x
+symbolToName :: Symbol -> (Name Exp)
+symbolToName (InfixS x) = string2Name x
+symbolToName (InfixBackticksS x) = string2Name x
+symbolToName (RegularS x) = string2Name x
 
 symbolP :: TushParser Symbol
 symbolP = do
@@ -115,10 +119,11 @@ vP :: TushParser V
 vP = do
   s <- symbolP
   case s of
-    InfixS name -> return $ V (Name name) Infix
-    RegularS name -> return $ V (Name name) Prefix
+    InfixS name -> return $ V (string2Name name) Infix
+    InfixBackticksS name -> return $ V (string2Name name) InfixBackticks
+    RegularS name -> return $ V (string2Name name) Prefix
 
-nameP :: TushParser Name
+nameP :: TushParser (Name Exp)
 nameP = do
   V n _ <- vP
   return n
@@ -134,7 +139,7 @@ chainlApp p = do
     rest a = (do
                  b <- p
                  case b of
-                   Var (V _ Infix) -> do
+                   Var (V _ fixity) | fixity == Infix || fixity == InfixBackticks -> do
                      c <- chainlApp p
                      rest (App (App b a) c)
                    _ -> rest (App a b))
@@ -154,7 +159,7 @@ lamP = do
   n <- nameP
   void $ tokenP RArrowT
   e <- expP
-  return $ Lam n e
+  return $ Lam $ bind n e
 
 letP :: TushParser Exp
 letP = do
@@ -164,7 +169,7 @@ letP = do
   e1 <- expP
   void $ tokenP InT
   e2 <- expP
-  return $ Let n e1 e2
+  return $ Let (bind n e2) e1
 
 intP :: TushParser Integer
 intP = do
@@ -187,7 +192,7 @@ pathP = do
                          _ -> False)
   return p
 
-stringP :: TushParser Text
+stringP :: TushParser String
 stringP = do
   StringT s <- satisfy (\case
                            StringT _ -> True
@@ -209,8 +214,8 @@ boolP = do
   return b
 
 litP :: TushParser Exp
-litP = Lit <$> (LInt <$> intP <|>
-                LFloat <$> floatP <|>
+litP = Lit <$> (LFloat <$> floatP <|>
+                LInt <$> intP <|>
                 LPath <$> pathP <|>
                 LString <$> stringP <|>
                 LChar <$> charP <|>
@@ -259,9 +264,11 @@ parseTush p text_ = case MP.parse dTokensP "<tush>" text_ of
   Left e -> Left e
   Right x -> return $ runIdentity $ runReaderT (MP.runParserT (unTushParser p) "<tush tokens>" x) (TushReadState)
 
-testParseTush :: Show p => TushParser p -> Text -> IO ()
-testParseTush p text_ = case parseTush p text_ of
+testParseTush :: Text -> IO ()
+testParseTush text_ = case parseTush expP text_ of
   Left e -> putStr $ pack $ errorBundlePretty e
   Right x -> case x of
     Left e -> putStr $ pack $ errorBundlePretty e
-    Right x -> putStrLn $ tshow x
+    Right x -> do
+      putStrLn $ tshow x
+      putStrLn $ runFreshM $ pExp x
