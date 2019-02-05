@@ -25,6 +25,7 @@ dependencies:
 - megaparsec
 - containers
 - mtl
+- vector
 
 library:
   source-dirs: src

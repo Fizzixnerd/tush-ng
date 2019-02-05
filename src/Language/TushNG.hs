@@ -5,131 +5,17 @@
 
 module Language.TushNG where
 
+import Language.Tush.Types
+import Language.Tush.Parse
+
 import ClassyPrelude as CP hiding (TVar)
 
+import Text.Megaparsec hiding (count)
+import Data.Void
 import Control.Monad.Except
 import Control.Monad.State
-import Control.Monad.RWS
-import qualified Data.Map as Map
-
-newtype Name = Name { unName :: Text }
-  deriving (Eq, Ord, Show, IsString)
-
-data Exp
-  = Var Name
-  | App Exp Exp
-  | Lam Name Exp
-  | Let Name Exp Exp
-  | Lit Lit
-  | If Exp Exp Exp
-  | Fix Exp
-  | Op Binop Exp Exp
-  deriving (Eq, Ord, Show)
-
-data Lit
-  = LInt Integer
-  | LBool Bool
-  deriving (Eq, Ord, Show)
-
-data Binop = Add | Sub | Mul | Eql
-  deriving (Eq, Ord, Show)
-
-data Program = Program (Vector Dec) Exp
-  deriving (Eq, Ord, Show)
-
-data Dec = Dec Name Exp
-  deriving (Eq, Ord, Show)
-
-newtype TVar = TV Text
-  deriving (Eq, Ord, Show)
-
-data Type
-  = TVar TVar
-  | TCon Name
-  | TArr Type Type
-  deriving (Eq, Ord, Show)
-
-infixr `TArr`
-
-data Scheme = Forall [TVar] Type
-  deriving (Eq, Ord, Show)
-
-newtype Infer a
-  = Infer { unInfer :: ExceptT TypeError (RWST Env (Vector Constraint) InferState Identity) a }
-  deriving ( Functor
-           , Applicative
-           , Monad
-           , MonadReader Env
-           , MonadWriter (Vector Constraint)
-           , MonadState InferState
-           , MonadRWS Env (Vector Constraint) InferState
-           , MonadError TypeError
-           )
-
-data InferState = InferState { count :: Int }
-  deriving (Eq, Ord, Show)
-
-data TypeError
-  = UnificationFail Type Type
-  | InfiniteType TVar Type
-  | UnboundVariable Name
-  | Ambiguous (Vector Constraint)
-  | UnificationMismatch (Vector Type) (Vector Type)
-  deriving (Eq, Ord, Show)
-
-newtype Constraint = Constraint { unConstraint :: (Type, Type) }
-  deriving (Eq, Ord, Show)
-
-newtype Env = Env { unEnv :: Map Name Scheme }
-  deriving (Eq, Show)
-
-newtype Subst = Subst (Map.Map TVar Type)
-  deriving (Eq, Ord, Show, Semigroup, Monoid)
-
-class Substitutable a where
-  apply :: Subst -> a -> a
-  ftv   :: a -> Set TVar
-
-instance Substitutable Type where
-  apply _ (TCon a)       = TCon a
-  apply (Subst s) t@(TVar a) = Map.findWithDefault t a s
-  apply s (t1 `TArr` t2) = apply s t1 `TArr` apply s t2
-
-  ftv TCon{}         = mempty
-  ftv (TVar a)       = singleton a
-  ftv (t1 `TArr` t2) = ftv t1 `union` ftv t2
-
-instance Substitutable Scheme where
-  apply (Subst s) (Forall as t)   = Forall as $ apply s' t
-    where s' = Subst $ foldr Map.delete s as
-  ftv (Forall as t) = ftv t \\ setFromList as
-
-instance Substitutable Constraint where
-   apply s (Constraint (t1, t2)) = Constraint (apply s t1, apply s t2)
-   ftv (Constraint (t1, t2)) = ftv t1 `union` ftv t2
-
-instance Substitutable a => Substitutable [a] where
-  apply = fmap . apply
-  ftv   = foldr (union . ftv) mempty
-
-instance Substitutable a => Substitutable (Vector a) where
-  apply = fmap . apply
-  ftv = foldr (union . ftv) mempty
-
-instance Substitutable Env where
-  apply s (Env env) = Env $ fmap (apply s) env
-  ftv (Env env) = ftv $ Map.elems env
-
-newtype Unifier = Unifier { unUnifier :: (Subst, Vector Constraint) }
-  deriving (Eq, Ord, Show)
-
-newtype Solve a = Solver { unSolve :: ExceptT TypeError (StateT Unifier Identity) a }
-  deriving ( Functor
-           , Applicative
-           , Monad
-           , MonadError TypeError
-           , MonadState Unifier
-           )
+import Control.Monad.Reader
+import qualified Data.List as List
 
 -- Types
 
@@ -138,6 +24,18 @@ typeInt = TCon "Int"
 
 typeBool :: Type
 typeBool = TCon "Bool"
+
+typePath :: Type
+typePath = TCon "Path"
+
+typeFloat :: Type
+typeFloat = TCon "Float"
+
+typeChar :: Type
+typeChar = TCon "Char"
+
+typeString :: Type
+typeString = TCon "String"
 
 -- Env
 
@@ -150,14 +48,11 @@ remove (Env env) name = Env $ deleteMap name env
 extends :: Env -> [(Name, Scheme)] -> Env
 extends (Env env) xs = Env $ union (mapFromList xs) env
 
-lookup :: Name -> Env -> Maybe Scheme
-lookup key (Env env) = CP.lookup key env
-
-merge :: Env -> Env -> Env
-merge (Env e1) (Env e2) = Env $ union e1 e2
+lookupName :: Name -> Env -> Maybe Scheme
+lookupName key (Env env) = CP.lookup key env
 
 mergeEnvs :: [Env] -> Env
-mergeEnvs = foldl' merge mempty
+mergeEnvs = foldl' (<>) mempty
 
 singletonEnv :: Name -> Scheme -> Env
 singletonEnv name scheme = Env $ singletonMap name scheme
@@ -171,123 +66,190 @@ envFromList xs = Env $ mapFromList xs
 envToList :: Env -> [(Name, Scheme)]
 envToList (Env env) = mapToList env
 
-instance Semigroup Env where
-  (<>) = merge
-
-instance Monoid Env where
-  mempty = Env mempty
-
 -- Infer
 
 initInfer :: InferState
 initInfer = InferState { count = 0 }
 
-runInfer :: Env -> Infer Type -> (Either TypeError Type, InferState, Vector Constraint)
-runInfer env (Infer m) = runIdentity $ runRWST (runExceptT m) env initInfer
+runInfer :: Env -> Infer (Type, Vector Constraint) -> (Either TypeError (Type, Vector Constraint))
+runInfer env (Infer m) = fst $ runIdentity $ runStateT (runReaderT (runExceptT m) env) initInfer
 
--- | Unify two types
-uni :: Type -> Type -> Infer ()
-uni t1 t2 = tell [Constraint (t1, t2)]
-
--- | Extend type environment
-inEnv :: Name -> Scheme -> Infer a -> Infer a
-inEnv x sc m = do
-  let scope e = extend (remove e x) x sc
-  local scope m
-.
 inferExp :: Env -> Exp -> Either TypeError Scheme
-inferExp env e
-  = let (t, s, w) = runInfer env (infer e)
-    in
-      case t of
-        Left err -> Left err
-        Right ty -> case runSolve w of
-          Left err -> Left err
-          Right subst -> Right $ closeOver $ apply subst ty
+inferExp env e = do
+  (_, _, _, s) <- constraintsExp env e
+  return s
+
+constraintsExp :: Env -> Exp -> Either TypeError (Vector Constraint, Subst, Type, Scheme)
+constraintsExp env e = case runInfer env (infer e) of
+  Left err -> Left err
+  Right (ty, cs) -> case runSolve cs of
+    Left err -> Left err
+    Right subst -> Right (cs, subst, ty, closeOver $ apply subst ty)
+
+closeOver :: Type -> Scheme
+closeOver = normalize . generalize mempty
+
+inEnv :: Name -> Scheme -> Infer a -> Infer a
+inEnv name scheme m = do
+  let scope e = extend (remove e name) name scheme
+  local scope m
+
+lookupEnv :: Name -> Infer Type
+lookupEnv name = do
+  env <- ask
+  case lookupName name env of
+    Nothing -> throwError $ UnboundVariable name
+    Just s -> do
+      t <- instantiate s
+      return t
+
+letters :: [Text]
+letters = [1..] >>= flip CP.replicateM ['a'..'z']
+
+fresh :: Infer Type
+fresh = do
+  s <- get
+  put s { count = count s + 1}
+  return $ TVar $ TV (letters `unsafeIndex` count s)
+
+instantiate :: Scheme -> Infer Type
+instantiate (Forall as t) = do
+  as' <- mapM (const fresh) as
+  let s = Subst $ mapFromList $ zip as as'
+  return $ apply s t
+
+generalize :: Env -> Type -> Scheme
+generalize env t = Forall as t
+  where as = toList $ ftv t \\ ftv env
+
+ops :: Binop -> Type
+ops Add = typeInt `TArr` typeInt `TArr` typeInt
+ops Mul = typeInt `TArr` typeInt `TArr` typeInt
+ops Sub = typeInt `TArr` typeInt `TArr` typeInt
+ops Eql = typeInt `TArr` typeInt `TArr` typeBool
 
 -- | Infer type of expression
-infer :: Exp -> Infer Type
+infer :: Exp -> Infer (Type, Vector Constraint)
 infer e = case e of
-  Lit (LInt _) -> return typeInt
-  Lit (LBool _) -> return typeBool
-  Var x -> lookupEnv x
-  Lam x e -> do
+  Lit (LInt _) -> return (typeInt, [])
+  Lit (LBool _) -> return (typeBool, [])
+  Lit (LPath _) -> return (typePath, [])
+  Lit (LFloat _) -> return (typeFloat, [])
+  Lit (LChar _ ) -> return (typeChar, [])
+  Lit (LString _) -> return (typeString, [])
+  Var (V x _) -> do
+    t <- lookupEnv x
+    return (t, [])
+  Lam x e' -> do
     tv <- fresh
-    t <- inEnv x (Forall [] tv) (infer e)
-    return $ tv `TArr` t
+    (t, c) <- inEnv x (Forall [] tv) (infer e')
+    return $ (tv `TArr` t, c)
   App e1 e2 -> do
-    t1 <- infer e1
-    t2 <- infer e2
+    (t1, c1) <- infer e1
+    (t2, c2) <- infer e2
     tv <- fresh
-    uni t1 (t2 `TArr` tv)
-    return tv
-  Let x e1 e2 -> do
+    return (tv, c1 <> c2 <> [Constraint (t1, t2 `TArr` tv)])
+  Let name e1 e2 -> do
     env <- ask
-    t1 <- infer e1
-    let sc = generalize env t1
-    t2 <- inEnv x sc (infer e2)
-    return t2
+    (t1, c1) <- infer e1
+    case runSolve c1 of
+      Left err -> throwError err
+      Right sub -> do
+        let scheme = generalize (apply sub env) (apply sub t1)
+        (t2, c2) <- inEnv name scheme $ local (apply sub) (infer e2)
+        return (t2, c1 <> c2)
   Fix e' -> do
-    t1 <- infer e'
+    (t1, c1) <- infer e'
     tv <- fresh
-    uni t1 (tv `TArr` tv)
-    return tv
+    return (tv, c1 <> [Constraint (tv `TArr` tv, t1)])
   Op op e1 e2 -> do
-    t1 <- infer e1
-    t2 <- infer e2
+    (t1, c1) <- infer e1
+    (t2, c2) <- infer e2
     tv <- fresh
     let u1 = t1 `TArr` t2 `TArr` tv
-        u2 = ops Map.! op
-    uni u1 u2
-    return tv
+        u2 = ops op
+    return (tv, c1 <> c2 <> [Constraint (u1, u2)])
   If cond tru fals -> do
-    t1 <- infer cond
-    t2 <- infer tru
-    t3 <- infer fals
-    uni t1 typeBool
-    uni t2 t3
-    return t2
+    (t1, c1) <- infer cond
+    (t2, c2) <- infer tru
+    (t3, c3) <- infer fals
+    return (t2, c1 <> c2 <> c3 <> [Constraint (t1, typeBool), Constraint (t2, t3)])
+
+inferTop :: Env -> Vector (Name, Exp) -> Either TypeError Env
+inferTop env xs = case uncons xs of
+  Nothing -> Right env
+  Just ((name, e), rest) -> case inferExp env e of
+    Left err -> Left err
+    Right ty -> inferTop (extend env name ty) rest
+
+normalize :: Scheme -> Scheme
+normalize (Forall _ body) = Forall (fmap snd ord) (normType body)
+  where
+    ord = zip (List.nub $ fv body) (map TV letters)
+
+    fv (TVar a) = [a] :: [TVar]
+    fv (TArr a b) = fv a <> fv b
+    fv (TCon _) = []
+
+    normType (TArr a b) = TArr (normType a) (normType b)
+    normType (TCon a) = TCon a
+    normType (TVar a) =
+      case CP.lookup a ord of
+        Just x -> TVar x
+        Nothing -> terror "type variable not in signature."
 
 -- Solve
 
-emptyUnifier :: Unifier
-emptyUnifier = Unifier (mempty, mempty)
-
-unifies :: Type -> Type -> Solve Unifier
-unifies t1 t2 | t1 == t2 = return emptyUnifier
+unifies :: Type -> Type -> Solve Subst
+unifies t1 t2 | t1 == t2 = return mempty
 unifies (TVar v) t = v `bind` t
 unifies t (TVar v) = v `bind` t
 unifies (TArr t1 t2) (TArr t3 t4) = unifyMany [t1, t2] [t3, t4]
 unifies t1 t2 = throwError $ UnificationFail t1 t2
 
-unifyMany :: [Type] -> [Type] -> Solve Unifier
-unifyMany [] [] = return emptyUnifier
+unifyMany :: [Type] -> [Type] -> Solve Subst
+unifyMany [] [] = return mempty
 unifyMany (t1 : ts1) (t2 : ts2) = do
-  Unifier (su1, cs1) <- unifies t1 t2
-  Unifier (su2, cs2) <- unifyMany (apply su1 ts1) (apply su1 ts2)
-  return $ Unifier (su2 `compose` su1, cs1 <> cs2)
+  su1 <- unifies t1 t2
+  su2 <- unifyMany (apply su1 ts1) (apply su1 ts2)
+  return $ su2 `compose` su1
 unifyMany t1 t2 = throwError $ UnificationMismatch (fromList t1) (fromList t2)
 
-solver :: Solve Subst
-solver = do
-  Unifier (su, cs) <- get
+solver :: Unifier -> Solve Subst
+solver (Unifier (su, cs)) = do
   case uncons cs of
     Nothing -> return su
     Just (Constraint (t1, t2), rest) -> do
-      Unifier (su1, cs1) <- unifies t1 t2
-      put $ Unifier (su1 `compose` su, cs1 <> (apply su1 rest))
-      solver
+      su1 <- unifies t1 t2
+      solver $ Unifier (su1 `compose` su, apply su1 rest)
 
-runSolve :: Unifier -> Either TypeError Subst
-runSolve unifier = fst $ runIdentity $ runStateT (runExceptT $ unSolve solver) unifier
+runSolve :: Vector Constraint -> Either TypeError Subst
+runSolve constraints = runExcept $ unSolve $ solver $ Unifier (mempty, constraints)
 
-bind :: TVar -> Type -> Solve Unifier
-bind a t | t == TVar a = return emptyUnifier
+bind :: TVar -> Type -> Solve Subst
+bind a t | t == TVar a = return mempty
          | occursCheck a t = throwError $ InfiniteType a t
-         | otherwise = return $ Unifier ((Subst $ singletonMap a t), [Constraint (TVar a, t)])
+         | otherwise = return $ Subst $ singletonMap a t
 
 occursCheck :: Substitutable a => TVar -> a -> Bool
 occursCheck a t = a `member` ftv t
 
 compose :: Subst -> Subst -> Subst
 (Subst s1) `compose` (Subst s2) = Subst $ fmap (apply (Subst s1)) s2 `union` s1
+
+checkTush :: Env
+          -> Text
+          -> Either (ParseErrorBundle Text Void)
+                    (Either (ParseErrorBundle TushTokenStream Void)
+                            (Either TypeError
+                                    Scheme))
+checkTush env text_ = fmap (inferExp env) <$> (parseTush expP text_)
+
+testCheckTush :: Env -> Text -> IO ()
+testCheckTush env text_ = case checkTush env text_ of
+  Left e -> putStr $ pack $ errorBundlePretty e
+  Right x -> case x of
+    Left e' -> putStr $ pack $ errorBundlePretty e'
+    Right y -> case y of
+      Left e'' -> print e''
+      Right z -> print z
