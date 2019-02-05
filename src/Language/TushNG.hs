@@ -110,11 +110,16 @@ inEnv name scheme m = do
   let scope e = extend (remove e name) name scheme
   local scope m
 
+inEnv' :: [(U.Name Exp, Scheme)] -> Infer a -> Infer a
+inEnv' types m = do
+  let scope e = extends e types
+  local scope m
+
 lookupEnv :: U.Name Exp -> Infer Type
 lookupEnv name = do
   env <- ask
   case lookupName name env of
-    Nothing -> throwError $ UnboundVariable name
+    Nothing -> fresh -- This used to throw an UnboundVariable Exception.
     Just s -> do
       t <- instantiate s
       return t
@@ -152,6 +157,7 @@ infer e = case e of
     ISub -> return (typeBinaryInt, [])
     IMul -> return (typeBinaryInt, [])
     IDiv -> return (typeBinaryInt, [])
+    IRem -> return (typeBinaryInt, [])
     IEql -> return (TCon "Int" `TArr` TCon "Int" `TArr` TCon "Bool", [])
     INeq -> return (TCon "Int" `TArr` TCon "Int" `TArr` TCon "Bool", [])
     BNot -> return (TCon "Bool" `TArr` TCon "Bool", [])
@@ -169,16 +175,22 @@ infer e = case e of
     (t2, c2) <- infer e2
     tv <- fresh
     return (tv, c1 <> c2 <> [Constraint (t1, t2 `TArr` tv)])
-  Let b e1 -> do
+  Let binds -> do
     env <- ask
-    (name, e2) <- U.unbind b
-    (t1, c1) <- infer e1
-    case runSolve c1 of
-      Left err -> throwError err
-      Right sub -> do
-        let scheme = generalize (apply sub env) (apply sub t1)
-        (t2, c2) <- inEnv name scheme $ local (apply sub) (infer e2)
-        return (t2, c1 <> c2)
+    (r, body) <- U.unbind binds
+    let bindings = U.unrec r
+    constraints <- CP.foldM (\acc (name, U.Embed binding) -> do
+      (t, c) <- inEnv' (fst . fst <$> acc) (infer binding)
+      case runSolve c of
+        Left err -> throwError err
+        Right sub -> do
+          let scheme = generalize (apply sub env) (apply sub t)
+          return $ acc <> [(((name, scheme), c), sub)]) [] bindings
+    let subs = snd <$> constraints
+        cs = snd . fst <$> constraints
+        types = fst . fst <$> constraints
+    (t, c) <- inEnv' types $ local (apply (foldl' compose mempty subs)) (infer body)
+    return (t, concat cs <> c)
   Fix e' -> do
     (t1, c1) <- infer e'
     tv <- fresh

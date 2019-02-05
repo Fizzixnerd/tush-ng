@@ -147,7 +147,7 @@ chainlApp p = do
 
 appP :: TushParser Exp
 appP = do
-  chainlApp $ (varP <|> lamP <|> litP <|> parensExpP)
+  chainlApp $ (varP <|> lamP <|> litP <|> builtinP <|> parensExpP)
   -- e2 <- expP
   -- case e2 of
   --   Var (V _ Infix) -> return $ App e2 e1
@@ -164,12 +164,17 @@ lamP = do
 letP :: TushParser Exp
 letP = do
   void $ tokenP LetT
-  n <- nameP
-  void $ tokenP EqualsT
-  e1 <- expP
+  binds <- sepBy1 letBindingP (tokenP SemicolonT)
   void $ tokenP InT
-  e2 <- expP
-  return $ Let (bind n e2) e1
+  body <- expP
+  return $ Let (bind (rec binds) body)
+
+letBindingP :: TushParser (Name Exp, Embed Exp)
+letBindingP = do
+  name <- nameP
+  void $ tokenP EqualsT
+  binding <- expP
+  return (name, embed binding)
 
 intP :: TushParser Integer
 intP = do
@@ -250,6 +255,7 @@ builtins =
   , ("imul", IMul)
   , ("idiv", IDiv)
   , ("ieql", IEql)
+  , ("irem", IRem)
   , ("ineq", INeq)
   , ("bnot", BNot)
   , ("bxor", BXor)

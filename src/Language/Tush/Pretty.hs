@@ -40,11 +40,17 @@ pExp (Lam b) = do
   (name, e) <- unbind b
   pe <- pExp e
   return $ parens $ "λ " ++ (pack $ name2String name) ++ " → " ++ pe
-pExp (Let b e2) = do
-  (name, e1) <- unbind b
-  pe1 <- pExp e1
-  pe2 <- pExp e2
-  return $ parens $ "let " ++ (pack $ name2String name) ++ " = " ++ pe1 ++ " in " ++ pe2
+pExp (Let binds) = do
+  (r, body) <- unbind binds
+  let bindings = unrec r
+  pBindings <- concat . intersperse "; " <$> (sequence $ pBinding <$> bindings)
+  pBody <- pExp body
+  return $ parens $ "let " ++ pBindings ++ " in " ++ pBody
+  where
+    pBinding :: Fresh m => (Name Exp, Embed Exp) -> m Text
+    pBinding (name, Embed binding) = do
+      b <- pExp binding
+      return $ (pack $ name2String name) ++ " = " ++ b
 pExp (Lit l) = return $ pLit l
 pExp (If cond tru fals) = do
   pc <- pExp cond
@@ -77,12 +83,4 @@ pPath (Path (bdy, pathType, fileType))
       pack $ prefix ++ "/" ++ (concat $ intersperse "/" bdy) ++ postfix
 
 pBuiltin :: Builtin -> Text
-pBuiltin b = parens $ "builtin " ++ case b of
-  IAdd -> "iadd"
-  ISub -> "isub"
-  IMul -> "imul"
-  IDiv -> "idiv"
-  IEql -> "ieql"
-  INeq -> "ineq"
-  BNot -> "bnot"
-  BXor -> "bxor"
+pBuiltin b = parens $ "builtin " ++ (toLower $ tshow b)

@@ -190,6 +190,9 @@ instance Alpha Fixity'
 instance Eq (Bind (Name Exp) Exp) where
   (==) = aeq
 
+instance Eq (Bind (Rec [(Name Exp, Embed Exp)]) Exp) where
+  (==) = aeq
+
 data V = V (Name Exp) Fixity'
   deriving (Eq, Show, Generic)
 
@@ -199,7 +202,7 @@ data Exp
   = Var V
   | App Exp Exp
   | Lam (Bind (Name Exp) Exp)
-  | Let (Bind (Name Exp) Exp) Exp
+  | Let (Bind (Rec [(Name Exp, Embed Exp)]) Exp)
   | Lit Lit
   | If Exp Exp Exp
   | Fix Exp
@@ -213,6 +216,7 @@ data Builtin
   | ISub
   | IMul
   | IDiv
+  | IRem
   | IEql
   | INeq
   | BNot

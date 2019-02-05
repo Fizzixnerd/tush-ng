@@ -33,7 +33,7 @@ done = mzero
 
 step :: Exp -> MaybeT FreshM Exp
 step (Var _) = done
-step (Builtin b) = done
+step (Builtin _) = done
 step (App (Lam b) e2) = do
   (x, e1) <- unbind b
   return $ subst x e2 e1
@@ -43,6 +43,7 @@ step (App (App (Builtin b) (Lit (LInt x))) (Lit (LInt y))) = do
     ISub -> return $ Lit $ LInt (x - y)
     IMul -> return $ Lit $ LInt (x * y)
     IDiv -> return $ Lit $ LInt (x `div` y)
+    IRem -> return $ Lit $ LInt (x `rem` y)
     IEql -> return $ Lit $ LBool (x == y)
     INeq -> return $ Lit $ LBool (x /= y)
     _ -> done
@@ -51,9 +52,17 @@ step (App (App (Builtin BXor) (Lit (LBool x))) (Lit (LBool y))) = return $ Lit $
 step (App e1 e2) = App <$> step e1 <*> pure e2
                    <|> App <$> pure e1 <*> step e2
 step (Lam _) = done
-step (Let b e) = do
-  (x, e') <- unbind b
-  return $ subst x e e'
+step (Let binds) = do
+  (r, body) <- unbind binds
+  let bindings = unrec r
+      newBody = substs ((\(x, Embed y) -> (x, y)) <$> bindings) body
+  -- pExp body >>= traceM . unpack
+  -- pExp newBody >>= traceM . unpack
+  if newBody == body
+    then return newBody
+    else do
+    newBody' <- step newBody
+    return $ Let $ U.bind (U.rec bindings) newBody'
 step (Lit _) = done
 step (If (Lit (LBool c)) tru fals)
   = if c
