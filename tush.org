@@ -1,13 +1,19 @@
 * Tush
 
 ** TODO
-*** Tests
 *** Quoted paths ('[/hello there/with spaces/])
-*** ADTs (sums, products, recursive; vectors)
+*** ADTs (sums, products, recursive)
+*** Pattern matching
+*** Vectors
+*** Recursive `let`
+*** Make Vector and Text work with unbound-generics
 *** Path polymorphism (typeclasses?)
-*** Std library
-**** Wrap ALL THE COMMANDS!
 *** Interface (use brick)
 
+** In Progress
+*** Tests
+*** Std library
+**** Wrap ALL THE COMMANDS!
+
 ** DONE
-*** Evaluator (use unbound)
+*** Evaluator (use unbound-generics)

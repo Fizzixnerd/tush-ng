@@ -243,8 +243,27 @@ parensExpP = do
   void $ tokenP RParenT
   return e
 
+builtins :: [(String, Builtin)]
+builtins =
+  [ ("iadd", IAdd)
+  , ("isub", ISub)
+  , ("imul", IMul)
+  , ("idiv", IDiv)
+  , ("ieql", IEql)
+  , ("ineq", INeq)
+  , ("bnot", BNot)
+  , ("bxor", BXor)
+  ]
+
+builtinP :: TushParser Exp
+builtinP = foldl' (<|>) empty $ (\(name, builtin) -> try $ do
+                                    void $ tokenP BuiltinT
+                                    n <- tokenP (SymbolT (RegularS name))
+                                    return $ Builtin builtin) <$> builtins
+
 expNoAppP :: TushParser Exp
 expNoAppP = parensExpP <|>
+            builtinP <|>
             varP <|>
             lamP <|>
             letP <|>
@@ -254,6 +273,13 @@ expNoAppP = parensExpP <|>
 
 expP :: TushParser Exp
 expP = try appP <|> expNoAppP
+
+defP :: TushParser Def
+defP = do
+  name <- nameP
+  void $ tokenP EqualsT
+  body <- expP
+  return $ Def (bind name body)
 
 parseTush :: TushParser p
           -> Text
@@ -269,6 +295,6 @@ testParseTush text_ = case parseTush expP text_ of
   Left e -> putStr $ pack $ errorBundlePretty e
   Right x -> case x of
     Left e -> putStr $ pack $ errorBundlePretty e
-    Right x -> do
-      putStrLn $ tshow x
-      putStrLn $ runFreshM $ pExp x
+    Right y -> do
+      putStrLn $ tshow y
+      putStrLn $ runFreshM $ pExp y

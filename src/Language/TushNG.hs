@@ -39,6 +39,9 @@ typeChar = TCon "Char"
 typeString :: Type
 typeString = TCon "String"
 
+typeBinaryInt :: Type
+typeBinaryInt = TCon "Int" `TArr` TCon "Int" `TArr` TCon "Int"
+
 prettyPrintType :: Type -> Text
 prettyPrintType (TVar (TV x)) = x
 prettyPrintType (TArr t1 t2) = "(" ++ prettyPrintType t1 ++ " → " ++ prettyPrintType t2 ++ ")"
@@ -144,6 +147,15 @@ infer e = case e of
   Lit (LFloat _) -> return (typeFloat, [])
   Lit (LChar _ ) -> return (typeChar, [])
   Lit (LString _) -> return (typeString, [])
+  Builtin b -> case b of
+    IAdd -> return (typeBinaryInt, [])
+    ISub -> return (typeBinaryInt, [])
+    IMul -> return (typeBinaryInt, [])
+    IDiv -> return (typeBinaryInt, [])
+    IEql -> return (TCon "Int" `TArr` TCon "Int" `TArr` TCon "Bool", [])
+    INeq -> return (TCon "Int" `TArr` TCon "Int" `TArr` TCon "Bool", [])
+    BNot -> return (TCon "Bool" `TArr` TCon "Bool", [])
+    BXor -> return (TCon "Bool" `TArr` TCon "Bool" `TArr` TCon "Bool", [])
   Var (V x _) -> do
     t <- lookupEnv x
     return (t, [])

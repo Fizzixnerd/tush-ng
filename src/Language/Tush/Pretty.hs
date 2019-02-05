@@ -13,6 +13,7 @@ parens :: Text -> Text
 parens x = "(" ++ x ++ ")"
 
 pExp :: Fresh m => Exp -> m Text
+pExp (Builtin b) = return $ pBuiltin b
 pExp (Var (V name fixity))
   = case fixity of
       InfixBackticks -> return $ pack $ "`" ++ name2String name ++ "`"
@@ -75,3 +76,13 @@ pPath (Path (bdy, pathType, fileType))
     in
       pack $ prefix ++ "/" ++ (concat $ intersperse "/" bdy) ++ postfix
 
+pBuiltin :: Builtin -> Text
+pBuiltin b = parens $ "builtin " ++ case b of
+  IAdd -> "iadd"
+  ISub -> "isub"
+  IMul -> "imul"
+  IDiv -> "idiv"
+  IEql -> "ieql"
+  INeq -> "ineq"
+  BNot -> "bnot"
+  BXor -> "bxor"

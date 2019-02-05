@@ -53,6 +53,7 @@ reservedWords = fromList [ ("=", EqualsT)
                          , ("fix", FixT)
                          , ("True", BoolT True)
                          , ("False", BoolT False)
+                         , ("builtin", BuiltinT)
                          ]
 
 reservedPunctuationP :: Parsec Void Text Token

@@ -33,9 +33,21 @@ done = mzero
 
 step :: Exp -> MaybeT FreshM Exp
 step (Var _) = done
+step (Builtin b) = done
 step (App (Lam b) e2) = do
   (x, e1) <- unbind b
   return $ subst x e2 e1
+step (App (App (Builtin b) (Lit (LInt x))) (Lit (LInt y))) = do
+  case b of
+    IAdd -> return $ Lit $ LInt (x + y)
+    ISub -> return $ Lit $ LInt (x - y)
+    IMul -> return $ Lit $ LInt (x * y)
+    IDiv -> return $ Lit $ LInt (x `div` y)
+    IEql -> return $ Lit $ LBool (x == y)
+    INeq -> return $ Lit $ LBool (x /= y)
+    _ -> done
+step (App (Builtin BNot) (Lit (LBool b))) = return $ Lit $ LBool $ not b
+step (App (App (Builtin BXor) (Lit (LBool x))) (Lit (LBool y))) = return $ Lit $ LBool $ x /= y
 step (App e1 e2) = App <$> step e1 <*> pure e2
                    <|> App <$> pure e1 <*> step e2
 step (Lam _) = done

@@ -67,6 +67,7 @@ data Token = LArrowT
            | ThenT
            | ElseT
            | FixT
+           | BuiltinT
            | BoolT Bool
            | SymbolT Symbol
            | StringT String
@@ -202,9 +203,23 @@ data Exp
   | Lit Lit
   | If Exp Exp Exp
   | Fix Exp
-  deriving (Eq, Show, Typeable, Generic)
+  | Builtin Builtin
+  deriving (Eq, Show, Generic)
 
 instance Alpha Exp
+
+data Builtin
+  = IAdd
+  | ISub
+  | IMul
+  | IDiv
+  | IEql
+  | INeq
+  | BNot
+  | BXor
+  deriving (Eq, Show, Generic)
+
+instance Alpha Builtin
 
 data Lit
   = LInt Integer
@@ -231,11 +246,13 @@ instance Subst Exp PathType where
   isvar _ = Nothing
 instance Subst Exp FileType where
   isvar _ = Nothing
+instance Subst Exp Builtin where
+  isvar _ = Nothing
 
-data Program = Program (Vector Dec) Exp
+data Program = Program (Vector Def) Exp
   deriving (Show)
 
-data Dec = Dec Name' Exp
+data Def = Def (Bind (Name Exp) Exp)
   deriving (Show)
 
 newtype TVar = TV Text
