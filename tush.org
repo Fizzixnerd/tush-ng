@@ -5,15 +5,24 @@
 *** ADTs (sums, products, recursive)
 *** Pattern matching
 *** Vectors
-*** Recursive `let`
 *** Make Vector and Text work with unbound-generics
 *** Path polymorphism (typeclasses?)
 *** Interface (use brick)
+**** REPL, etc.
 
 ** In Progress
 *** Tests
 *** Std library
+**** Currently implementing primitives
 **** Wrap ALL THE COMMANDS!
 
 ** DONE
 *** Evaluator (use unbound-generics)
+*** Recursive `let`
+    Saying this is done is a little rich. There are at least two bugs. In `step
+    (Let binds) = do ...` there is a line `newbody' <- step newBody`. This is
+    broken since step returns done then it just won't eval anything. In the
+    typechecker, every unknown variable is just given a fresh TVar. Even if they
+    appear more than once, and are incompatible, each appearance gets a fresh
+    TVar.
+

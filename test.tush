@@ -1,0 +1,6 @@
+main = fact x
+
+fact = \n -> if builtin ieql n 1 then 1 else builtin imul n (fact (builtin isub n 1))
+
+x = 5
+

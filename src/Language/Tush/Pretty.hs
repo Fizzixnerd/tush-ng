@@ -57,9 +57,6 @@ pExp (If cond tru fals) = do
   pt <- pExp tru
   pf <- pExp fals
   return $ parens $ "if " ++ pc ++ " then " ++ pt ++ " else " ++ pf
-pExp (Fix e) = do
-  pe <- pExp e
-  return $ "fix " ++ pe
 
 pLit :: Lit -> Text
 pLit (LBool b) = tshow b

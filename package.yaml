@@ -54,3 +54,4 @@ tests:
     dependencies:
     - tush-ng
     - hspec
+    - classy-prelude

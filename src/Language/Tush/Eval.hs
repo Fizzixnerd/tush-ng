@@ -20,6 +20,7 @@ import ClassyPrelude
 import Unbound.Generics.LocallyNameless as U
 
 import Control.Monad.Trans.Maybe
+import Data.Void
 import Text.Megaparsec
 
 lam :: String -> Exp -> Exp
@@ -59,20 +60,21 @@ step (Let binds) = do
   -- pExp body >>= traceM . unpack
   -- pExp newBody >>= traceM . unpack
   if newBody == body
-    then return newBody
+    then do
+    case runFreshM $ runMaybeT $ step newBody of
+      -- both substitutions and reduction didn't change the body, so just return
+      -- it.
+      Nothing -> return newBody
+      Just newBody' -> return $ Let (U.bind (U.rec bindings) newBody')
     else do
-    newBody' <- step newBody
-    return $ Let $ U.bind (U.rec bindings) newBody'
+    newBody' <- step newBody <|> return newBody
+    return $ Let (U.bind (U.rec bindings) newBody')
 step (Lit _) = done
 step (If (Lit (LBool c)) tru fals)
   = if c
     then return tru
     else return fals
 step (If cond tru fals) = If <$> step cond <*> pure tru <*> pure fals
-step (Fix (Lam b)) = do
-  (x, e) <- unbind b
-  return $ subst x (Fix (Lam b)) e
-step (Fix x) = Fix <$> step x
 
 -- | Transitive closure
 tc :: (Monad m, Functor m) => (a -> MaybeT m a) -> (a -> m a)
@@ -84,6 +86,16 @@ tc f a = do
 
 eval :: Exp -> Exp
 eval x = runFreshM (tc step x)
+
+step1 :: Exp -> Exp
+step1 x = case runFreshM $ runMaybeT $ step x of
+  Nothing -> x
+  Just y -> y
+
+evalTush :: Text -> Either (ParseErrorBundle Text Void)
+                           (Either (ParseErrorBundle TushTokenStream Void)
+                                   Exp)
+evalTush text_ = fmap eval <$> (parseTush expP text_)
 
 testEvalTush :: Text -> IO ()
 testEvalTush text_ = case parseTush expP text_ of

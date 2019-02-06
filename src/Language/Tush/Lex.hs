@@ -43,6 +43,7 @@ reservedWords = fromList [ ("=", EqualsT)
                          , ("[", LBracketT)
                          , ("]", RBracketT)
                          , (";", SemicolonT)
+                         , ("|", VBarT)
                          , ("\\", BSlashT)
                          , ("\n", NewlineT)
                          , ("let", LetT)
@@ -54,12 +55,13 @@ reservedWords = fromList [ ("=", EqualsT)
                          , ("True", BoolT True)
                          , ("False", BoolT False)
                          , ("builtin", BuiltinT)
+                         , ("data", DataT)
                          ]
 
-reservedPunctuationP :: Parsec Void Text Token
-reservedPunctuationP = foldl' (<|>) empty $ (\(s, t) -> do
-                                                void $ string s
-                                                return t) <$> reservedWords
+reservedWordsP :: Parsec Void Text Token
+reservedWordsP = foldl' (<|>) empty $ (\(s, t) -> do
+                                          void $ string s
+                                          return t) <$> reservedWords
 
 regularP :: Parsec Void Text Symbol
 regularP = RegularS <$> regularP'
@@ -166,7 +168,7 @@ charP = do
 
 tokenP :: Parsec Void Text Token
 tokenP = do
-  t <- reservedPunctuationP <|>
+  t <- reservedWordsP <|>
        (PathT <$> pathP) <|>
        (FloatingT <$> try floatingP) <|>
        (IntegralT <$> try integralP) <|>

@@ -1,0 +1,3 @@
+data Data = Data Int
+
+main = Data 3

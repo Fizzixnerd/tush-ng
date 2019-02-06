@@ -60,6 +60,7 @@ data Token = LArrowT
            | ColonT -- single colon
            | SemicolonT
            | BSlashT
+           | VBarT
            | NewlineT
            | LetT
            | InT
@@ -68,6 +69,7 @@ data Token = LArrowT
            | ElseT
            | FixT
            | BuiltinT
+           | DataT
            | BoolT Bool
            | SymbolT Symbol
            | StringT String
@@ -87,18 +89,18 @@ type Col = Int
 -- | The current debug information kept around so that we can tell the
 -- user where an error occured.  More can be added later without
 -- breaking much code.
-data DebugInfo = DebugInfo { _diStart :: !(Row, Col)
-                           , _diEnd :: !(Row, Col)
-                           }
-  deriving (Eq, Ord, Show)
+data DebugInfo = DebugInfo
+  { _diStart :: !(Row, Col)
+  , _diEnd :: !(Row, Col)
+  } deriving (Eq, Ord, Show)
 
 -- | A `Token' with attached debug information; the parser never sees
 -- the debug information directly and so doesn't need to worry about
 -- it.
-data DebugToken d = DebugToken { _dtInfo :: !d
-                               , _dtToken :: !Token
-                               }
-  deriving (Eq, Ord, Show)
+data DebugToken d = DebugToken
+  { _dtInfo :: !d
+  , _dtToken :: !Token
+  } deriving (Eq, Ord, Show)
 
 -- | Type synonym for `DebugToken' instantiated on our currently used
 -- `DebugInfo'
@@ -179,7 +181,7 @@ data FileType = FTRegular | FTDirectory
 
 instance Alpha FileType
 
-newtype Name' = Name' { unName' :: Text }
+newtype Name' = Name' { unName' :: String }
   deriving (Eq, Ord, Show, IsString)
 
 data Fixity' = Prefix | Infix | InfixBackticks
@@ -187,25 +189,24 @@ data Fixity' = Prefix | Infix | InfixBackticks
 
 instance Alpha Fixity'
 
-instance Eq (Bind (Name Exp) Exp) where
+instance Eq (Bind Pattern Exp) where
   (==) = aeq
 
-instance Eq (Bind (Rec [(Name Exp, Embed Exp)]) Exp) where
+instance Eq (Bind (Rec [(Pattern, Embed Exp)]) Exp) where
   (==) = aeq
 
-data V = V (Name Exp) Fixity'
+data V a = V (Name a) Fixity'
   deriving (Eq, Show, Generic)
 
-instance Alpha V
+instance Typeable a => Alpha (V a)
 
 data Exp
-  = Var V
+  = Var (V Exp)
   | App Exp Exp
-  | Lam (Bind (Name Exp) Exp)
-  | Let (Bind (Rec [(Name Exp, Embed Exp)]) Exp)
+  | Lam (Bind Pattern Exp)
+  | Let (Bind (Rec [(Pattern, Embed Exp)]) Exp)
   | Lit Lit
   | If Exp Exp Exp
-  | Fix Exp
   | Builtin Builtin
   deriving (Eq, Show, Generic)
 
@@ -232,13 +233,30 @@ data Lit
   | LString String
   | LChar Char
   | LBool Bool
-  deriving (Eq, Ord, Show, Generic)
+  | LObject Object
+  deriving (Eq, Show, Generic)
 
 instance Alpha Lit
+
+data Object = Object
+  { oType :: Name Type
+  , oTag :: Name Exp
+  , oContents :: [Exp]
+  } deriving (Eq, Show, Generic)
+
+instance Alpha Object
+
+data Pattern = PName (Name Exp) | PConstructor (Name Exp) [Pattern]
+  deriving (Eq, Show, Generic)
+
+instance Alpha Pattern
+
 instance Subst Exp Exp where
   isvar (Var (V x _)) = Just (SubstName x)
   isvar _ = Nothing
-instance Subst Exp V where
+instance Subst Exp Pattern where
+  isvar _ = Nothing
+instance Subst Exp (V Exp) where
   isvar _ = Nothing
 instance Subst Exp Fixity' where
   isvar _ = Nothing
@@ -252,12 +270,25 @@ instance Subst Exp FileType where
   isvar _ = Nothing
 instance Subst Exp Builtin where
   isvar _ = Nothing
+instance Subst Exp Object where
+  isvar _ = Nothing
 
-data Program = Program (Vector Def) Exp
-  deriving (Show)
+data Program = Program [Def]
+  deriving (Eq, Show)
 
-data Def = Def (Bind (Name Exp) Exp)
-  deriving (Show)
+data Data = Data
+  { ddName :: Name Type
+  , ddProducts :: [DataProduct]
+  } deriving (Eq, Show)
+
+data DataProduct = DataProduct
+  { dpName :: Name Exp
+  , dpType :: [Type]
+  } deriving (Eq, Show)
+
+data Def = ValDef (Name Exp, Embed Exp)
+         | DataDef Data
+  deriving (Eq, Show)
 
 newtype TVar = TV Text
   deriving (Eq, Ord, Show)

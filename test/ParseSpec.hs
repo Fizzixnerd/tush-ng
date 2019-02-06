@@ -10,7 +10,7 @@ import Language.Tush.Types
 import Language.Tush.Parse
 
 spec :: Spec
-spec = parallel $ describe "ParseTest" $ do
+spec = parallel $ describe "ParseSpec" $ do
   describe "litP" $ do
     it "parses an Int" $ do
       (parseTush litP "3") `shouldBe` (Right $ Right $ Lit $ LInt 3)
@@ -77,3 +77,19 @@ spec = parallel $ describe "ParseTest" $ do
       parseTush lamP "\\x -> x" `shouldBe` (Right $ Right $ Lam (bind (string2Name "x") (Var $ V (string2Name "x") Prefix)))
     it "parses nested lambdas" $ do
       parseTush lamP "\\x -> \\y -> x y" `shouldBe` (Right $ Right $ Lam (bind (string2Name "x") (Lam (bind (string2Name "y") (App (Var $ V (string2Name "x") Prefix) (Var $ V (string2Name "y") Prefix))))))
+  describe "letP" $ do
+    it "parses a simple let" $ do
+      parseTush letP "let x = 3 in x" `shouldBe` (Right $ Right $ Let (bind (rec [(string2Name "x", Embed $ Lit $ LInt 3)]) (Var $ V (string2Name "x") Prefix)))
+    it "parses multiple bindings" $ do
+      parseTush letP "let x = 4; y = x in y" `shouldBe` (Right $ Right $ Let (bind (rec [(string2Name "x", Embed $ Lit $ LInt 4), (string2Name "y", Embed $ Var $ V (string2Name "x") Prefix)]) (Var $ V (string2Name "y") Prefix)))
+  describe "builtinP" $ do
+    it "parses a builtin" $ do
+      parseTush builtinP "builtin iadd" `shouldBe` (Right $ Right $ Builtin IAdd)
+  describe "typeP" $ do
+    it "parses a TCon" $ do
+      parseTush typeP "Int" `shouldBe` (Right $ Right $ TCon "Int")
+    it "parses a TVar" $ do
+      parseTush typeP "a" `shouldBe` (Right $ Right $ TVar (TV "a"))
+    it "parse a Symbolic TCon" $ do
+      parseTush typeP ">>=" `shouldBe` (Right $ Right $ TCon ">>=")
+

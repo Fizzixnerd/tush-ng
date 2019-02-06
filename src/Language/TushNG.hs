@@ -45,7 +45,7 @@ typeBinaryInt = TCon "Int" `TArr` TCon "Int" `TArr` TCon "Int"
 prettyPrintType :: Type -> Text
 prettyPrintType (TVar (TV x)) = x
 prettyPrintType (TArr t1 t2) = "(" ++ prettyPrintType t1 ++ " → " ++ prettyPrintType t2 ++ ")"
-prettyPrintType (TCon (Name' x)) = x
+prettyPrintType (TCon (Name' x)) = pack x
 
 prettyPrintScheme :: Scheme -> Text
 prettyPrintScheme (Forall tvs t)
@@ -179,7 +179,7 @@ infer e = case e of
     env <- ask
     (r, body) <- U.unbind binds
     let bindings = U.unrec r
-    constraints <- CP.foldM (\acc (name, U.Embed binding) -> do
+    constraints <- CP.foldM (\acc (pat, U.Embed binding) -> do
       (t, c) <- inEnv' (fst . fst <$> acc) (infer binding)
       case runSolve c of
         Left err -> throwError err
@@ -191,10 +191,6 @@ infer e = case e of
         types = fst . fst <$> constraints
     (t, c) <- inEnv' types $ local (apply (foldl' compose mempty subs)) (infer body)
     return (t, concat cs <> c)
-  Fix e' -> do
-    (t1, c1) <- infer e'
-    tv <- fresh
-    return (tv, c1 <> [Constraint (tv `TArr` tv, t1)])
   If cond tru fals -> do
     (t1, c1) <- infer cond
     (t2, c2) <- infer tru

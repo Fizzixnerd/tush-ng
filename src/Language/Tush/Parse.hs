@@ -14,6 +14,7 @@ import Language.Tush.Pretty
 import ClassyPrelude hiding (many, some, try)
 import Text.Megaparsec as MP hiding (satisfy)
 import Data.Void
+import Data.Char
 
 import Control.Monad.Fail
 
@@ -115,7 +116,7 @@ symbolP = do
                            _ -> False)
   return s
 
-vP :: TushParser V
+vP :: TushParser (V a)
 vP = do
   s <- symbolP
   case s of
@@ -123,7 +124,7 @@ vP = do
     InfixBackticksS name -> return $ V (string2Name name) InfixBackticks
     RegularS name -> return $ V (string2Name name) Prefix
 
-nameP :: TushParser (Name Exp)
+nameP :: TushParser (Name a)
 nameP = do
   V n _ <- vP
   return n
@@ -236,11 +237,6 @@ ifP = do
   fals <- expP
   return $ If cond tru fals
 
-fixP :: TushParser Exp
-fixP = do
-  void $ tokenP FixT
-  Fix <$> expP
-
 parensExpP :: TushParser Exp
 parensExpP = do
   void $ tokenP LParenT
@@ -262,10 +258,11 @@ builtins =
   ]
 
 builtinP :: TushParser Exp
-builtinP = foldl' (<|>) empty $ (\(name, builtin) -> try $ do
-                                    void $ tokenP BuiltinT
-                                    n <- tokenP (SymbolT (RegularS name))
-                                    return $ Builtin builtin) <$> builtins
+builtinP = do
+  void $ tokenP BuiltinT
+  foldl' (<|>) empty $ (\(name, builtin) -> do
+                           void $ tokenP (SymbolT (RegularS name))
+                           return $ Builtin builtin) <$> builtins
 
 expNoAppP :: TushParser Exp
 expNoAppP = parensExpP <|>
@@ -274,18 +271,62 @@ expNoAppP = parensExpP <|>
             lamP <|>
             letP <|>
             litP <|>
-            ifP <|>
-            fixP
+            ifP
 
 expP :: TushParser Exp
 expP = try appP <|> expNoAppP
 
-defP :: TushParser Def
-defP = do
+tconP :: TushParser Type
+tconP = do
+  typeName <- nameP
+  return $ TCon $ Name' $ name2String typeName
+
+tvarP :: TushParser Type
+tvarP = do
+  typeName <- try $ do
+    n <- nameP
+    let firstChar = (name2String n) `unsafeIndex` 0
+    guard (isLower firstChar)
+    return n
+  return $ TVar $ TV (pack $ name2String typeName)
+
+typeP :: TushParser Type
+typeP = do
+  -- TVar should come first, so anything weird can be a TCon.
+  tvarP <|> tconP
+
+dataP :: TushParser Data
+dataP = do
+  void $ tokenP DataT
+  name <- nameP
+  void $ tokenP EqualsT
+  products <- sepBy1 dataProductP (tokenP VBarT)
+  return $ Data name products
+
+dataProductP :: TushParser DataProduct
+dataProductP = do
+  name <- nameP
+  types <- many $ do
+    notFollowedBy (tokenP VBarT)
+    tconP
+  return $ DataProduct name types
+
+valDefP :: TushParser Def
+valDefP = do
   name <- nameP
   void $ tokenP EqualsT
   body <- expP
-  return $ Def (bind name body)
+  return $ ValDef (name, Embed body)
+
+dataDefP :: TushParser Def
+dataDefP = DataDef <$> dataP
+
+defP :: TushParser Def
+defP = dataDefP <|>
+       valDefP
+
+programP :: TushParser Program
+programP = Program <$> (sepEndBy defP (many $ tokenP NewlineT))
 
 parseTush :: TushParser p
           -> Text
