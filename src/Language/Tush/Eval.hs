@@ -14,6 +14,7 @@ import Language.Tush.Types
 import Language.Tush.Parse
 import Language.TushNG
 import Language.Tush.Pretty
+import Language.Tush.Reduce
 
 import ClassyPrelude
 
@@ -23,21 +24,21 @@ import Control.Monad.Trans.Maybe
 import Data.Void
 import Text.Megaparsec
 
-lam :: String -> Exp -> Exp
-lam x t = Lam $ U.bind (string2Name x) t
+lam :: String -> Exp Pattern -> Exp Pattern
+lam x t = Lam $ U.bind (PName $ string2Name x) t
 
-var :: String -> Exp
+var :: String -> Exp p
 var x = Var $ V (string2Name x) Prefix
 
 done :: MonadPlus m => m a
 done = mzero
 
-step :: Exp -> MaybeT FreshM Exp
+step :: Exp FlatPattern -> MaybeT FreshM (Exp FlatPattern)
 step (Var _) = done
 step (Builtin _) = done
 step (App (Lam b) e2) = do
   (x, e1) <- unbind b
-  return $ subst x e2 e1
+  step $ Let (U.bind (rec [(x, Embed e2)]) e1)
 step (App (App (Builtin b) (Lit (LInt x))) (Lit (LInt y))) = do
   case b of
     IAdd -> return $ Lit $ LInt (x + y)
@@ -56,7 +57,23 @@ step (Lam _) = done
 step (Let binds) = do
   (r, body) <- unbind binds
   let bindings = unrec r
-      newBody = substs ((\(x, Embed y) -> (x, y)) <$> bindings) body
+      -- let (Data f x) = g d; (Data g y) = f d in y
+      -- let (Data f x) = g d; (Data g y) = f d in g d
+      patternBind :: U.Rec [(FlatPattern, Embed (Exp FlatPattern))]
+                  -> FlatPattern
+                  -> Exp FlatPattern
+                  -> MaybeT FreshM [(Name (Exp FlatPattern), Exp FlatPattern)]
+      patternBind _ (FPName name) e = return [(name, e)]
+      patternBind _ (FPConstructor patCons names) (Lit (LObject (Object _ valCons vals)))
+        = if patCons == valCons
+          then return $ zip names vals
+          else done
+      patternBind bs x y = do
+        newY <- step $ Let $ U.bind bs y
+        patternBind bs x $ newY
+      unembededBindings = (\(x, Embed y) -> (x, y)) <$> bindings
+  bindings' <- concat <$> (sequence ((uncurry (patternBind r) <$> unembededBindings)))
+  let newBody = substs bindings' body
   -- pExp body >>= traceM . unpack
   -- pExp newBody >>= traceM . unpack
   if newBody == body
@@ -84,28 +101,28 @@ tc f a = do
     Just a' -> tc f a'
     Nothing -> return a
 
-eval :: Exp -> Exp
+eval :: Exp FlatPattern -> Exp FlatPattern
 eval x = runFreshM (tc step x)
 
-step1 :: Exp -> Exp
+step1 :: Exp FlatPattern -> Exp FlatPattern
 step1 x = case runFreshM $ runMaybeT $ step x of
   Nothing -> x
   Just y -> y
 
 evalTush :: Text -> Either (ParseErrorBundle Text Void)
                            (Either (ParseErrorBundle TushTokenStream Void)
-                                   Exp)
-evalTush text_ = fmap eval <$> (parseTush expP text_)
+                                   (Exp FlatPattern))
+evalTush text_ = fmap (eval . runFreshM . flattenPatterns) <$> (parseTush expP text_)
 
 testEvalTush :: Text -> IO ()
 testEvalTush text_ = case parseTush expP text_ of
   Left e -> putStr $ pack $ errorBundlePretty e
   Right lexed -> case lexed of
-    Left e' -> putStr $ pack $ errorBundlePretty e'
-    Right parsed -> case inferExp mempty parsed of
-      Left e'' -> do
-        print e''
-        putStrLn $ runFreshM $ pExp $ eval parsed
+    Left e -> putStr $ pack $ errorBundlePretty e
+    Right parsed -> case inferExp mempty $ runFreshM $ flattenPatterns parsed of
+      Left e -> do
+        print e
+        putStrLn $ runFreshM $ pExp pFlatPattern $ eval $ runFreshM $ flattenPatterns $ parsed
       Right scheme -> do
         putStrLn $ prettyPrintScheme scheme
-        putStrLn $ runFreshM $ pExp $ eval parsed
+        putStrLn $ runFreshM $ pExp pFlatPattern $ eval $ runFreshM $ flattenPatterns $ parsed

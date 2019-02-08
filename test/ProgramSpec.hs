@@ -15,9 +15,7 @@ import Language.Tush.Eval
 import Language.Tush.Program
 
 spec :: Spec
-spec = parallel $ describe "ProgramSpec" $ do
+spec = parallel $ do
   describe "programToExp" $ do
     it "runs a sample program" $ do
-      (do
-          programText <- readFileUtf8 "tush/test.tush"
-          return $ fmap (eval . programToExp) <$> (parseTush programP programText)) `shouldReturn` (Right $ Right $ Lit $ LInt 120)
+      runFile "tush/test.tush" `shouldReturn` (Right $ Right $ Lit $ LInt 120)

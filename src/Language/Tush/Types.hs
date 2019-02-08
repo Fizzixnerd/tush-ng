@@ -189,10 +189,10 @@ data Fixity' = Prefix | Infix | InfixBackticks
 
 instance Alpha Fixity'
 
-instance Eq (Bind Pattern Exp) where
+instance (Alpha p, Typeable p) => Eq (Bind p (Exp p)) where
   (==) = aeq
 
-instance Eq (Bind (Rec [(Pattern, Embed Exp)]) Exp) where
+instance (Alpha p, Typeable p) => Eq (Bind (Rec [(p, Embed (Exp p))]) (Exp p)) where
   (==) = aeq
 
 data V a = V (Name a) Fixity'
@@ -200,17 +200,18 @@ data V a = V (Name a) Fixity'
 
 instance Typeable a => Alpha (V a)
 
-data Exp
-  = Var (V Exp)
-  | App Exp Exp
-  | Lam (Bind Pattern Exp)
-  | Let (Bind (Rec [(Pattern, Embed Exp)]) Exp)
-  | Lit Lit
-  | If Exp Exp Exp
+-- | Expressions parameterized on the pattern type they support.
+data Exp p
+  = Var (V (Exp p))
+  | App (Exp p) (Exp p)
+  | Lam (Bind p (Exp p))
+  | Let (Bind (Rec [(p, Embed (Exp p))]) (Exp p))
+  | Lit (Lit p)
+  | If (Exp p) (Exp p) (Exp p)
   | Builtin Builtin
   deriving (Eq, Show, Generic)
 
-instance Alpha Exp
+instance (Alpha p, Typeable p) => Alpha (Exp p)
 
 data Builtin
   = IAdd
@@ -226,72 +227,81 @@ data Builtin
 
 instance Alpha Builtin
 
-data Lit
+data Lit p
   = LInt Integer
   | LFloat Double
   | LPath Path
   | LString String
   | LChar Char
   | LBool Bool
-  | LObject Object
+  | LObject (Object p)
   deriving (Eq, Show, Generic)
 
-instance Alpha Lit
+instance (Alpha p, Typeable p) => Alpha (Lit p)
 
-data Object = Object
+data Object p = Object
   { oType :: Name Type
-  , oTag :: Name Exp
-  , oContents :: [Exp]
+  , oTag :: Name (Exp p)
+  , oContents :: [Exp p]
   } deriving (Eq, Show, Generic)
 
-instance Alpha Object
+instance (Alpha p, Typeable p) => Alpha (Object p)
 
-data Pattern = PName (Name Exp) | PConstructor (Name Exp) [Pattern]
+data Pattern = PName (Name (Exp Pattern))
+             | PConstructor (Name (Exp Pattern)) [Pattern]
   deriving (Eq, Show, Generic)
 
 instance Alpha Pattern
 
-instance Subst Exp Exp where
+data FlatPattern = FPName (Name (Exp FlatPattern))
+                 | FPConstructor (Name (Exp FlatPattern)) [Name (Exp FlatPattern)]
+  deriving (Eq, Show, Generic)
+
+instance Alpha FlatPattern
+
+instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) (Exp p) where
   isvar (Var (V x _)) = Just (SubstName x)
   isvar _ = Nothing
-instance Subst Exp Pattern where
+instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) Pattern where
   isvar _ = Nothing
-instance Subst Exp (V Exp) where
+instance Subst (Exp FlatPattern) FlatPattern where
   isvar _ = Nothing
-instance Subst Exp Fixity' where
+instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) (V (Exp p)) where
   isvar _ = Nothing
-instance Subst Exp Lit where
+instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) Fixity' where
   isvar _ = Nothing
-instance Subst Exp Path where
+instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) (Lit p) where
   isvar _ = Nothing
-instance Subst Exp PathType where
+instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) Path where
   isvar _ = Nothing
-instance Subst Exp FileType where
+instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) PathType where
   isvar _ = Nothing
-instance Subst Exp Builtin where
+instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) FileType where
   isvar _ = Nothing
-instance Subst Exp Object where
+instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) Builtin where
+  isvar _ = Nothing
+instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) (Object p) where
   isvar _ = Nothing
 
-data Program = Program [Def]
+data Program p = Program [Def p]
   deriving (Eq, Show)
 
-data Data = Data
+data Data p = Data
   { ddName :: Name Type
-  , ddProducts :: [DataProduct]
+  , ddProducts :: [DataProduct p]
   } deriving (Eq, Show)
 
-data DataProduct = DataProduct
-  { dpName :: Name Exp
+data DataProduct p = DataProduct
+  { dpName :: Name (Exp p)
   , dpType :: [Type]
   } deriving (Eq, Show)
 
-data Def = ValDef (Name Exp, Embed Exp)
-         | DataDef Data
+data Def p = ValDef (Name (Exp p), Embed (Exp p))
+           | DataDef (Data p)
   deriving (Eq, Show)
 
 newtype TVar = TV Text
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Show, IsString)
 
 data Type
   = TVar TVar
@@ -304,24 +314,24 @@ infixr `TArr`
 data Scheme = Forall [TVar] Type
   deriving (Eq, Ord, Show)
 
-newtype Infer a
-  = Infer { unInfer :: ExceptT TypeError (ReaderT Env (StateT InferState FreshM)) a }
+newtype Infer p a
+  = Infer { unInfer :: ExceptT (TypeError p) (ReaderT (Env p) (StateT InferState FreshM)) a }
   deriving ( Functor
            , Applicative
            , Monad
-           , MonadReader Env
+           , MonadReader (Env p)
            , MonadState InferState
-           , MonadError TypeError
+           , MonadError (TypeError p)
            , Fresh
            )
 
 data InferState = InferState { count :: Int }
   deriving (Eq, Ord, Show)
 
-data TypeError
+data TypeError p
   = UnificationFail Type Type
   | InfiniteType TVar Type
-  | UnboundVariable (Name Exp)
+  | UnboundVariable (Name (Exp p))
   | Ambiguous (Vector Constraint)
   | UnificationMismatch (Vector Type) (Vector Type)
   deriving (Eq, Ord, Show)
@@ -329,13 +339,13 @@ data TypeError
 newtype Constraint = Constraint { unConstraint :: (Type, Type) }
   deriving (Eq, Ord, Show)
 
-newtype Env = Env { unEnv :: Map (Name Exp) Scheme }
+newtype Env p = Env { unEnv :: Map (Name (Exp p)) Scheme }
   deriving (Eq, Show)
 
-instance Semigroup Env where
+instance Semigroup (Env p) where
   (Env e1) <> (Env e2) = Env $ CP.union e1 e2
 
-instance Monoid Env where
+instance Monoid (Env p) where
   mempty = Env mempty
 
 newtype Subst' = Subst' (Map.Map TVar Type)
@@ -371,16 +381,16 @@ instance Substitutable a => Substitutable (Vector a) where
   apply = fmap . Language.Tush.Types.apply
   ftv = foldr (CP.union . ftv) mempty
 
-instance Substitutable Env where
+instance Substitutable (Env p) where
   apply s (Env env) = Env $ fmap (Language.Tush.Types.apply s) env
   ftv (Env env) = ftv $ Map.elems env
 
 newtype Unifier = Unifier { unUnifier :: (Subst', Vector Constraint) }
   deriving (Eq, Ord, Show)
 
-newtype Solve a = Solver { unSolve :: Except TypeError a }
+newtype Solve p a = Solver { unSolve :: Except (TypeError p) a }
   deriving ( Functor
            , Applicative
            , Monad
-           , MonadError TypeError
+           , MonadError (TypeError p)
            )

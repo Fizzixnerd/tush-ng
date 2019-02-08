@@ -1,0 +1,10 @@
+data A = A Int B
+
+data B = B Bool
+
+x = A 3 (B True)
+
+main = let (A i (B b)) = x in b
+
+# transform to:
+# main = let (A i x1) = x in let (B b) = x1 in b

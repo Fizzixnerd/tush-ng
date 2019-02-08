@@ -2,6 +2,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE OverloadedLists #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Language.TushNG where
 
@@ -9,6 +10,7 @@ import qualified Unbound.Generics.LocallyNameless as U
 
 import Language.Tush.Types
 import Language.Tush.Parse
+import Language.Tush.Reduce
 
 import ClassyPrelude as CP hiding (TVar)
 
@@ -39,8 +41,14 @@ typeChar = TCon "Char"
 typeString :: Type
 typeString = TCon "String"
 
+binary :: Type -> Type
+binary t = t `TArr` t `TArr` t
+
+endo :: Type -> Type
+endo t = t `TArr` t
+
 typeBinaryInt :: Type
-typeBinaryInt = TCon "Int" `TArr` TCon "Int" `TArr` TCon "Int"
+typeBinaryInt = binary typeInt
 
 prettyPrintType :: Type -> Text
 prettyPrintType (TVar (TV x)) = x
@@ -53,33 +61,38 @@ prettyPrintScheme (Forall tvs t)
     then prettyPrintType t
     else "∀ " ++ concat (intersperse ", " ((\(TV x) -> x) <$> tvs)) ++ ". " ++ prettyPrintType t
 
+unArrow :: Type -> [Type]
+unArrow t@TCon{} = [t]
+unArrow (t `TArr` u) = t : unArrow u
+unArrow t@TVar{} = [t]
+
 -- Env
 
-extend :: Env -> U.Name Exp -> Scheme -> Env
+extend :: Env p -> U.Name (Exp p) -> Scheme -> Env p
 extend (Env env) x s = Env $ insertMap x s env
 
-remove :: Env -> U.Name Exp  -> Env
+remove :: Env p -> U.Name (Exp p) -> Env p
 remove (Env env) name = Env $ deleteMap name env
 
-extends :: Env -> [(U.Name Exp, Scheme)] -> Env
+extends :: Env p -> [(U.Name (Exp p), Scheme)] -> Env p
 extends (Env env) xs = Env $ union (mapFromList xs) env
 
-lookupName :: U.Name Exp -> Env -> Maybe Scheme
+lookupName :: U.Name (Exp p) -> (Env p) -> Maybe Scheme
 lookupName key (Env env) = CP.lookup key env
 
-mergeEnvs :: [Env] -> Env
+mergeEnvs :: [Env p] -> Env p
 mergeEnvs = foldl' (<>) mempty
 
-singletonEnv :: U.Name Exp -> Scheme -> Env
+singletonEnv :: U.Name (Exp p) -> Scheme -> Env p
 singletonEnv name scheme = Env $ singletonMap name scheme
 
-keysEnv :: Env -> [U.Name Exp]
+keysEnv :: Env p -> [U.Name (Exp p)]
 keysEnv (Env env) = keys env
 
-envFromList :: [(U.Name Exp, Scheme)] -> Env
+envFromList :: [(U.Name (Exp p), Scheme)] -> Env p
 envFromList xs = Env $ mapFromList xs
 
-envToList :: Env -> [(U.Name Exp, Scheme)]
+envToList :: Env p -> [(U.Name (Exp p), Scheme)]
 envToList (Env env) = mapToList env
 
 -- Infer
@@ -87,15 +100,15 @@ envToList (Env env) = mapToList env
 initInfer :: InferState
 initInfer = InferState { count = 0 }
 
-runInfer :: Env -> Infer (Type, Vector Constraint) -> (Either TypeError (Type, Vector Constraint))
+runInfer :: Env p -> Infer p (Type, Vector Constraint) -> (Either (TypeError p) (Type, Vector Constraint))
 runInfer env (Infer m) = fst $ U.runFreshM $ runStateT (runReaderT (runExceptT m) env) initInfer
 
-inferExp :: Env -> Exp -> Either TypeError Scheme
+inferExp :: Env FlatPattern -> Exp FlatPattern -> Either (TypeError FlatPattern) Scheme
 inferExp env e = do
   (_, _, _, s) <- constraintsExp env e
   return s
 
-constraintsExp :: Env -> Exp -> Either TypeError (Vector Constraint, Subst', Type, Scheme)
+constraintsExp :: Env FlatPattern -> Exp FlatPattern -> Either (TypeError FlatPattern) (Vector Constraint, Subst', Type, Scheme)
 constraintsExp env e = case runInfer env (infer e) of
   Left err -> Left err
   Right (ty, cs) -> case runSolve cs of
@@ -105,21 +118,21 @@ constraintsExp env e = case runInfer env (infer e) of
 closeOver :: Type -> Scheme
 closeOver = normalize . generalize mempty
 
-inEnv :: U.Name Exp -> Scheme -> Infer a -> Infer a
+inEnv :: U.Name (Exp p) -> Scheme -> Infer p a -> Infer p a
 inEnv name scheme m = do
   let scope e = extend (remove e name) name scheme
   local scope m
 
-inEnv' :: [(U.Name Exp, Scheme)] -> Infer a -> Infer a
+inEnv' :: [(U.Name (Exp p), Scheme)] -> Infer p a -> Infer p a
 inEnv' types m = do
   let scope e = extends e types
   local scope m
 
-lookupEnv :: U.Name Exp -> Infer Type
+lookupEnv :: U.Name (Exp p) -> Infer p Type
 lookupEnv name = do
   env <- ask
   case lookupName name env of
-    Nothing -> fresh -- This used to throw an UnboundVariable Exception.
+    Nothing -> throwError $ UnboundVariable name --fresh -- This used to throw an UnboundVariable Exception.
     Just s -> do
       t <- instantiate s
       return t
@@ -127,24 +140,44 @@ lookupEnv name = do
 letters :: [Text]
 letters = [1..] >>= flip CP.replicateM ['a'..'z']
 
-fresh :: Infer Type
+fresh :: Infer p Type
 fresh = do
   s <- get
   put s { count = count s + 1}
   return $ TVar $ TV (letters `unsafeIndex` count s)
 
-instantiate :: Scheme -> Infer Type
+instantiate :: Scheme -> Infer p Type
 instantiate (Forall as t) = do
   as' <- mapM (const fresh) as
   let s = Subst' $ mapFromList $ zip as as'
   return $ apply s t
 
-generalize :: Env -> Type -> Scheme
+generalize :: Env p -> Type -> Scheme
 generalize env t = Forall as t
   where as = toList $ ftv t \\ ftv env
 
+inPattern :: Type -> FlatPattern -> Infer FlatPattern a -> Infer FlatPattern a
+inPattern patType pat action = case pat of
+  FPName name -> do
+    inEnv name (Forall [] patType) action
+  FPConstructor consName names -> do
+    consType <- lookupEnv consName
+    let componentTypes = unArrow consType
+        typeActions = (\(n, t) -> \act -> inEnv n (Forall [] t) act) <$> (zip names componentTypes)
+        withTypes = foldl' (.) id $ typeActions
+    withTypes action
+
+patternTypes :: FlatPattern
+             -> Infer FlatPattern [(U.Name (Exp FlatPattern), Type)]
+patternTypes (FPName name) = do
+  ty <- lookupEnv name
+  return [(name, ty)]
+patternTypes (FPConstructor _ names) = mapM (\name -> do
+                                                ty <- lookupEnv name
+                                                return (name, ty)) names
+
 -- | Infer type of expression
-infer :: Exp -> Infer (Type, Vector Constraint)
+infer :: Exp FlatPattern -> Infer FlatPattern (Type, Vector Constraint)
 infer e = case e of
   Lit (LInt _) -> return (typeInt, [])
   Lit (LBool _) -> return (typeBool, [])
@@ -152,24 +185,27 @@ infer e = case e of
   Lit (LFloat _) -> return (typeFloat, [])
   Lit (LChar _ ) -> return (typeChar, [])
   Lit (LString _) -> return (typeString, [])
+  Lit (LObject (Object _ consName _)) -> do
+    ty <- unsafeLast . unArrow <$> lookupEnv consName
+    return (ty, [])
   Builtin b -> case b of
-    IAdd -> return (typeBinaryInt, [])
-    ISub -> return (typeBinaryInt, [])
-    IMul -> return (typeBinaryInt, [])
-    IDiv -> return (typeBinaryInt, [])
-    IRem -> return (typeBinaryInt, [])
+    IAdd -> return (binary typeInt, [])
+    ISub -> return (binary typeInt, [])
+    IMul -> return (binary typeInt, [])
+    IDiv -> return (binary typeInt, [])
+    IRem -> return (binary typeInt, [])
     IEql -> return (TCon "Int" `TArr` TCon "Int" `TArr` TCon "Bool", [])
     INeq -> return (TCon "Int" `TArr` TCon "Int" `TArr` TCon "Bool", [])
-    BNot -> return (TCon "Bool" `TArr` TCon "Bool", [])
-    BXor -> return (TCon "Bool" `TArr` TCon "Bool" `TArr` TCon "Bool", [])
+    BNot -> return (endo typeBool, [])
+    BXor -> return (binary typeBool, [])
   Var (V x _) -> do
     t <- lookupEnv x
     return (t, [])
   Lam b -> do
     tv <- fresh
-    (x, e') <- U.unbind b
-    (t, c) <- inEnv x (Forall [] tv) (infer e')
-    return $ (tv `TArr` t, c)
+    (pat, e') <- U.unbind b
+    (t, cs) <- inPattern tv pat (infer e')
+    return (tv `TArr` t, cs)
   App e1 e2 -> do
     (t1, c1) <- infer e1
     (t2, c2) <- infer e2
@@ -178,14 +214,19 @@ infer e = case e of
   Let binds -> do
     env <- ask
     (r, body) <- U.unbind binds
-    let bindings = U.unrec r
-    constraints <- CP.foldM (\acc (pat, U.Embed binding) -> do
-      (t, c) <- inEnv' (fst . fst <$> acc) (infer binding)
-      case runSolve c of
-        Left err -> throwError err
-        Right sub -> do
-          let scheme = generalize (apply sub env) (apply sub t)
-          return $ acc <> [(((name, scheme), c), sub)]) [] bindings
+    let bindings = (\(x, U.Embed y) -> (x, y)) <$> U.unrec r
+    constraints <-
+      CP.foldM (\acc (pat, binding) -> do
+                   tv <- fresh
+                   (nAndTs, (_, c)) <- inPattern tv pat $ inEnv' (fst . fst <$> acc) $ do
+                     namesAndTypes <- patternTypes pat
+                     typeAndConstraints <- infer binding
+                     return (namesAndTypes, typeAndConstraints)
+                   case runSolve c of
+                     Left err -> throwError err
+                     Right sub -> do
+                       let nameAndSchemes = (\(name, ty) -> ((((name, generalize (apply sub env) (apply sub ty)), c), sub))) <$> nAndTs
+                       return $ acc <> nameAndSchemes) [] bindings
     let subs = snd <$> constraints
         cs = snd . fst <$> constraints
         types = fst . fst <$> constraints
@@ -197,7 +238,7 @@ infer e = case e of
     (t3, c3) <- infer fals
     return (t2, c1 <> c2 <> c3 <> [Constraint (t1, typeBool), Constraint (t2, t3)])
 
-inferTop :: Env -> Vector (U.Name Exp, Exp) -> Either TypeError Env
+inferTop :: Env FlatPattern -> Vector (U.Name (Exp FlatPattern), (Exp FlatPattern)) -> Either (TypeError FlatPattern) (Env FlatPattern)
 inferTop env xs = case uncons xs of
   Nothing -> Right env
   Just ((name, e), rest) -> case inferExp env e of
@@ -222,14 +263,14 @@ normalize (Forall _ body) = Forall (fmap snd ord) (normType body)
 
 -- Solve
 
-unifies :: Type -> Type -> Solve Subst'
+unifies :: Type -> Type -> Solve p Subst'
 unifies t1 t2 | t1 == t2 = return mempty
 unifies (TVar v) t = v `bind` t
 unifies t (TVar v) = v `bind` t
 unifies (TArr t1 t2) (TArr t3 t4) = unifyMany [t1, t2] [t3, t4]
 unifies t1 t2 = throwError $ UnificationFail t1 t2
 
-unifyMany :: [Type] -> [Type] -> Solve Subst'
+unifyMany :: [Type] -> [Type] -> Solve p Subst'
 unifyMany [] [] = return mempty
 unifyMany (t1 : ts1) (t2 : ts2) = do
   su1 <- unifies t1 t2
@@ -237,7 +278,7 @@ unifyMany (t1 : ts1) (t2 : ts2) = do
   return $ su2 `compose` su1
 unifyMany t1 t2 = throwError $ UnificationMismatch (fromList t1) (fromList t2)
 
-solver :: Unifier -> Solve Subst'
+solver :: Unifier -> Solve p Subst'
 solver (Unifier (su, cs)) = do
   case uncons cs of
     Nothing -> return su
@@ -245,10 +286,10 @@ solver (Unifier (su, cs)) = do
       su1 <- unifies t1 t2
       solver $ Unifier (su1 `compose` su, apply su1 rest)
 
-runSolve :: Vector Constraint -> Either TypeError Subst'
+runSolve :: Vector Constraint -> Either (TypeError p) Subst'
 runSolve constraints = runExcept $ unSolve $ solver $ Unifier (mempty, constraints)
 
-bind :: TVar -> Type -> Solve Subst'
+bind :: TVar -> Type -> Solve p Subst'
 bind a t | t == TVar a = return mempty
          | occursCheck a t = throwError $ InfiniteType a t
          | otherwise = return $ Subst' $ singletonMap a t
@@ -259,15 +300,15 @@ occursCheck a t = a `member` ftv t
 compose :: Subst' -> Subst' -> Subst'
 (Subst' s1) `compose` (Subst' s2) = Subst' $ fmap (apply (Subst' s1)) s2 `union` s1
 
-checkTush :: Env
+checkTush :: Env FlatPattern
           -> Text
           -> Either (ParseErrorBundle Text Void)
                     (Either (ParseErrorBundle TushTokenStream Void)
-                            (Either TypeError
+                            (Either (TypeError FlatPattern)
                                     Scheme))
-checkTush env text_ = fmap (inferExp env) <$> (parseTush expP text_)
+checkTush env text_ = fmap (inferExp env . U.runFreshM . flattenPatterns) <$> (parseTush expP text_)
 
-testCheckTush :: Env -> Text -> IO ()
+testCheckTush :: Env FlatPattern -> Text -> IO ()
 testCheckTush env text_ = case checkTush env text_ of
   Left e -> putStr $ pack $ errorBundlePretty e
   Right x -> case x of

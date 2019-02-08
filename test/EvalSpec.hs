@@ -6,9 +6,10 @@ import Test.Hspec
 
 import Language.Tush.Types
 import Language.Tush.Eval
+import Language.Tush.Program
 
 spec :: Spec
-spec = parallel $ describe "EvalSpec" $ do
+spec = parallel $ do
   describe "let" $ do
     it "binds names" $ do
       evalTush "let x = 3 in x" `shouldBe` (Right $ Right $ Lit $ LInt 3)
@@ -26,6 +27,10 @@ spec = parallel $ describe "EvalSpec" $ do
       evalTush "let odd = \\x -> if builtin ieql (builtin irem x 2) 1 then True else builtin bnot (even x); even = \\x -> if builtin ieql (builtin irem x 2) 0 then True else builtin bnot (odd x) in odd 2" `shouldBe` (Right $ Right $ Lit $ LBool False)
     it "evals a transformed full Program" $ do
       evalTush "let fact = \\n -> if builtin ieql n 1 then 1 else builtin imul n (fact (builtin isub n 1)); x = 5; main = fact x in main" `shouldBe` (Right $ Right $ Lit $ LInt 120)
+    -- it "does a simple destructuring bind" $
+    --   runFile "tush/simple_bind.tush" `shouldReturn` (Right $ Right $ Lit $ LInt 3)
+    -- it "does a sequential destructuring bind" $
+    --   runFile "tush/sequential_bind.tush" `shouldReturn` (Right $ Right $ Lit $ LInt 3)
   describe "if" $ do
     it "branches correctly (1)" $ do
       evalTush "if True then 1 else 0" `shouldBe` (Right $ Right $ Lit $ LInt 1)

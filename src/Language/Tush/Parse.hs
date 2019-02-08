@@ -10,6 +10,7 @@ import Unbound.Generics.LocallyNameless
 import Language.Tush.Types as T
 import Language.Tush.Lex (dTokensP)
 import Language.Tush.Pretty
+import Language.Tush.Reduce
 
 import ClassyPrelude hiding (many, some, try)
 import Text.Megaparsec as MP hiding (satisfy)
@@ -104,7 +105,7 @@ tokenP t = satisfy (== t) MP.<?> (show t)
 anyTokenP :: TushParser T.Token
 anyTokenP = satisfy (const True) MP.<?> "Any Token"
 
-symbolToName :: Symbol -> (Name Exp)
+symbolToName :: Symbol -> (Name a)
 symbolToName (InfixS x) = string2Name x
 symbolToName (InfixBackticksS x) = string2Name x
 symbolToName (RegularS x) = string2Name x
@@ -129,10 +130,10 @@ nameP = do
   V n _ <- vP
   return n
 
-varP :: TushParser Exp
+varP :: TushParser (Exp Pattern)
 varP = Var <$> vP
 
-chainlApp :: TushParser Exp -> TushParser Exp
+chainlApp :: TushParser (Exp Pattern) -> TushParser (Exp Pattern)
 chainlApp p = do
   a <- p
   rest a
@@ -146,7 +147,7 @@ chainlApp p = do
                    _ -> rest (App a b))
              <|> return a
 
-appP :: TushParser Exp
+appP :: TushParser (Exp Pattern)
 appP = do
   chainlApp $ (varP <|> lamP <|> litP <|> builtinP <|> parensExpP)
   -- e2 <- expP
@@ -154,15 +155,15 @@ appP = do
   --   Var (V _ Infix) -> return $ App e2 e1
   --   _ -> return $ App e1 e2
 
-lamP :: TushParser Exp
+lamP :: TushParser (Exp Pattern)
 lamP = do
   void $ tokenP BSlashT
-  n <- nameP
+  pat <- patternP
   void $ tokenP RArrowT
   e <- expP
-  return $ Lam $ bind n e
+  return $ Lam $ bind pat e
 
-letP :: TushParser Exp
+letP :: TushParser (Exp Pattern)
 letP = do
   void $ tokenP LetT
   binds <- sepBy1 letBindingP (tokenP SemicolonT)
@@ -170,12 +171,28 @@ letP = do
   body <- expP
   return $ Let (bind (rec binds) body)
 
-letBindingP :: TushParser (Name Exp, Embed Exp)
+parensP :: TushParser p -> TushParser p
+parensP p = do
+  void $ tokenP LParenT
+  p' <- p
+  void $ tokenP RParenT
+  return p'
+
+constructorP :: TushParser Pattern
+constructorP = parensP $ do
+  constructor <- nameP
+  pats <- many patternP
+  return $ PConstructor constructor pats
+
+patternP :: TushParser Pattern
+patternP = PName <$> nameP <|> constructorP
+
+letBindingP :: TushParser (Pattern, Embed (Exp Pattern))
 letBindingP = do
-  name <- nameP
+  pat <- patternP
   void $ tokenP EqualsT
   binding <- expP
-  return (name, embed binding)
+  return (pat, embed binding)
 
 intP :: TushParser Integer
 intP = do
@@ -219,7 +236,7 @@ boolP = do
                        _ -> False)
   return b
 
-litP :: TushParser Exp
+litP :: TushParser (Exp Pattern)
 litP = Lit <$> (LFloat <$> floatP <|>
                 LInt <$> intP <|>
                 LPath <$> pathP <|>
@@ -227,7 +244,7 @@ litP = Lit <$> (LFloat <$> floatP <|>
                 LChar <$> charP <|>
                 LBool <$> boolP)
 
-ifP :: TushParser Exp
+ifP :: TushParser (Exp Pattern)
 ifP = do
   void $ tokenP IfT
   cond <- expP
@@ -237,7 +254,7 @@ ifP = do
   fals <- expP
   return $ If cond tru fals
 
-parensExpP :: TushParser Exp
+parensExpP :: TushParser (Exp Pattern)
 parensExpP = do
   void $ tokenP LParenT
   e <- expP
@@ -257,14 +274,14 @@ builtins =
   , ("bxor", BXor)
   ]
 
-builtinP :: TushParser Exp
+builtinP :: TushParser (Exp Pattern)
 builtinP = do
   void $ tokenP BuiltinT
   foldl' (<|>) empty $ (\(name, builtin) -> do
                            void $ tokenP (SymbolT (RegularS name))
                            return $ Builtin builtin) <$> builtins
 
-expNoAppP :: TushParser Exp
+expNoAppP :: TushParser (Exp Pattern)
 expNoAppP = parensExpP <|>
             builtinP <|>
             varP <|>
@@ -273,7 +290,7 @@ expNoAppP = parensExpP <|>
             litP <|>
             ifP
 
-expP :: TushParser Exp
+expP :: TushParser (Exp Pattern)
 expP = try appP <|> expNoAppP
 
 tconP :: TushParser Type
@@ -295,7 +312,7 @@ typeP = do
   -- TVar should come first, so anything weird can be a TCon.
   tvarP <|> tconP
 
-dataP :: TushParser Data
+dataP :: TushParser (Data Pattern)
 dataP = do
   void $ tokenP DataT
   name <- nameP
@@ -303,7 +320,7 @@ dataP = do
   products <- sepBy1 dataProductP (tokenP VBarT)
   return $ Data name products
 
-dataProductP :: TushParser DataProduct
+dataProductP :: TushParser (DataProduct Pattern)
 dataProductP = do
   name <- nameP
   types <- many $ do
@@ -311,21 +328,21 @@ dataProductP = do
     tconP
   return $ DataProduct name types
 
-valDefP :: TushParser Def
+valDefP :: TushParser (Def Pattern)
 valDefP = do
   name <- nameP
   void $ tokenP EqualsT
   body <- expP
   return $ ValDef (name, Embed body)
 
-dataDefP :: TushParser Def
+dataDefP :: TushParser (Def Pattern)
 dataDefP = DataDef <$> dataP
 
-defP :: TushParser Def
+defP :: TushParser (Def Pattern)
 defP = dataDefP <|>
        valDefP
 
-programP :: TushParser Program
+programP :: TushParser (Program Pattern)
 programP = Program <$> (sepEndBy defP (many $ tokenP NewlineT))
 
 parseTush :: TushParser p
@@ -337,6 +354,12 @@ parseTush p text_ = case MP.parse dTokensP "<tush>" text_ of
   Left e -> Left e
   Right x -> return $ runIdentity $ runReaderT (MP.runParserT (unTushParser p) "<tush tokens>" x) (TushReadState)
 
+parseFlatExpression :: Text
+                    -> Either (ParseErrorBundle Text Void)
+                              (Either (ParseErrorBundle TushTokenStream Void)
+                                      (Exp FlatPattern))
+parseFlatExpression text_ = fmap (runFreshM . flattenPatterns) <$> (parseTush expP text_)
+
 testParseTush :: Text -> IO ()
 testParseTush text_ = case parseTush expP text_ of
   Left e -> putStr $ pack $ errorBundlePretty e
@@ -344,4 +367,4 @@ testParseTush text_ = case parseTush expP text_ of
     Left e -> putStr $ pack $ errorBundlePretty e
     Right y -> do
       putStrLn $ tshow y
-      putStrLn $ runFreshM $ pExp y
+      putStrLn $ runFreshM $ pExp pPattern y
