@@ -156,25 +156,18 @@ generalize :: Env p -> Type -> Scheme
 generalize env t = Forall as t
   where as = toList $ ftv t \\ ftv env
 
-inPattern :: Type -> FlatPattern -> Infer FlatPattern a -> Infer FlatPattern a
-inPattern patType pat action = case pat of
-  FPName name -> do
-    inEnv name (Forall [] patType) action
-  FPConstructor consName names -> do
-    consType <- lookupEnv consName
-    let componentTypes = unArrow consType
-        typeActions = (\(n, t) -> \act -> inEnv n (Forall [] t) act) <$> (zip names componentTypes)
-        withTypes = foldl' (.) id $ typeActions
-    withTypes action
-
-patternTypes :: FlatPattern
-             -> Infer FlatPattern [(U.Name (Exp FlatPattern), Type)]
-patternTypes (FPName name) = do
-  ty <- lookupEnv name
-  return [(name, ty)]
-patternTypes (FPConstructor _ names) = mapM (\name -> do
-                                                ty <- lookupEnv name
-                                                return (name, ty)) names
+inPattern :: FlatPattern -> Infer FlatPattern a -> Infer FlatPattern ([(U.Name (Exp FlatPattern), Scheme)], a)
+inPattern (FPName name) action = do
+  freshName <- fresh
+  let scheme = Forall [] freshName
+  result <- inEnv name scheme action
+  return ([(name, scheme)], result)
+inPattern (FPConstructor consName names) action = do
+  consType <- lookupEnv consName
+  env <- ask
+  let nameTypePairs = zip names (generalize env <$> unArrow consType)
+  result <- inEnv' nameTypePairs action
+  return (nameTypePairs, result)
 
 -- | Infer type of expression
 infer :: Exp FlatPattern -> Infer FlatPattern (Type, Vector Constraint)
@@ -202,36 +195,45 @@ infer e = case e of
     t <- lookupEnv x
     return (t, [])
   Lam b -> do
-    tv <- fresh
     (pat, e') <- U.unbind b
-    (t, cs) <- inPattern tv pat (infer e')
-    return (tv `TArr` t, cs)
+    (nameType, (t, cs)) <- inPattern pat (infer e')
+    case pat of
+      FPName _ -> do
+        case nameType of
+          [(_, ty)] -> do
+            tv <- instantiate ty
+            return (tv `TArr` t, cs)
+          _ -> error "unreacheable"
+      FPConstructor consName _ -> do
+        consType <- unsafeLast . unArrow <$> lookupEnv consName
+        return (consType `TArr` t, cs)
   App e1 e2 -> do
     (t1, c1) <- infer e1
     (t2, c2) <- infer e2
     tv <- fresh
     return (tv, c1 <> c2 <> [Constraint (t1, t2 `TArr` tv)])
   Let binds -> do
-    env <- ask
     (r, body) <- U.unbind binds
     let bindings = (\(x, U.Embed y) -> (x, y)) <$> U.unrec r
-    constraints <-
-      CP.foldM (\acc (pat, binding) -> do
-                   tv <- fresh
-                   (nAndTs, (_, c)) <- inPattern tv pat $ inEnv' (fst . fst <$> acc) $ do
-                     namesAndTypes <- patternTypes pat
-                     typeAndConstraints <- infer binding
-                     return (namesAndTypes, typeAndConstraints)
-                   case runSolve c of
-                     Left err -> throwError err
-                     Right sub -> do
-                       let nameAndSchemes = (\(name, ty) -> ((((name, generalize (apply sub env) (apply sub ty)), c), sub))) <$> nAndTs
-                       return $ acc <> nameAndSchemes) [] bindings
-    let subs = snd <$> constraints
-        cs = snd . fst <$> constraints
-        types = fst . fst <$> constraints
-    (t, c) <- inEnv' types $ local (apply (foldl' compose mempty subs)) (infer body)
-    return (t, concat cs <> c)
+    constraintsAndPatternTypes <- mapM
+      (\(pat, body_) -> do
+          (patternTypes, (bodyType, bodyConstraints)) <- inPattern pat (infer body_)
+          case pat of
+            FPName _ -> do
+              case patternTypes of
+                [(_, scheme)] -> do
+                  varType <- instantiate scheme
+                  return (patternTypes, bodyConstraints <> [Constraint (bodyType, varType)])
+                _ -> error "unreachable"
+            FPConstructor consName _ -> do
+              consValType <- lookupEnv consName
+              return $ (patternTypes, bodyConstraints <> [Constraint (consValType, bodyType)])) bindings
+    let (types, constraints) = concat constraintsAndPatternTypes
+    case runSolve constraints of
+      Left err -> throwError err
+      Right sub -> do
+        (t, c) <- inEnv' types $ local (apply sub) (infer body)
+        return (t, c <> constraints)
   If cond tru fals -> do
     (t1, c1) <- infer cond
     (t2, c2) <- infer tru
