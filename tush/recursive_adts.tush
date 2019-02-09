@@ -1,0 +1,3 @@
+data Tree = Leaf Int | Node Tree Tree
+
+main = (Node (Leaf 3) (Leaf 4))

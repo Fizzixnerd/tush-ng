@@ -86,12 +86,25 @@ step (Let binds) = do
     else do
     newBody' <- step newBody <|> return newBody
     return $ Let (U.bind (U.rec bindings) newBody')
+step (Lit (LObject (Object ty consName es))) = do
+  es' <- steps es
+  return $ Lit $ LObject $ Object ty consName es'
 step (Lit _) = done
 step (If (Lit (LBool c)) tru fals)
   = if c
     then return tru
     else return fals
 step (If cond tru fals) = If <$> step cond <*> pure tru <*> pure fals
+
+steps :: [Exp FlatPattern] -> MaybeT FreshM [Exp FlatPattern]
+steps (x:xs) = do
+  let steppedX = runFreshM $ runMaybeT $ step x
+  case steppedX of
+    Just x' -> return (x' : xs)
+    Nothing -> do
+      xs' <- steps xs
+      return $ x : xs'
+steps [] = mzero
 
 -- | Transitive closure
 tc :: (Monad m, Functor m) => (a -> MaybeT m a) -> (a -> m a)

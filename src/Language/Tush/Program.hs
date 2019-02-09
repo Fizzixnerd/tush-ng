@@ -50,6 +50,13 @@ programTush :: Text
                                (Exp FlatPattern, Env FlatPattern)))
 programTush pt = fmap (\x -> (runFreshM $ flattenPatterns $ programToExp x, programToEnv x)) <$> (parseTush programP pt)
 
+checkTushProgram :: Text
+                 -> Either (ParseErrorBundle Text Void)
+                           (Either (ParseErrorBundle TushTokenStream Void)
+                                   (Either (TypeError FlatPattern)
+                                            Scheme))
+checkTushProgram text_ = fmap (\x -> inferExp (programToEnv x) $ U.runFreshM $ flattenPatterns $ programToExp x) <$> (parseTush programP text_)
+
 testProgramTush :: MonadIO m => Text -> m ()
 testProgramTush text_ = case programTush text_ of
   Left e -> putStr $ pack $ errorBundlePretty e
@@ -62,6 +69,9 @@ testProgramTush text_ = case programTush text_ of
       Right scheme -> do
         putStrLn $ prettyPrintScheme scheme
         putStrLn $ runFreshM $ pExp pFlatPattern $ eval parsed
+
+simpleConstructor :: Exp FlatPattern
+simpleConstructor = Let $ U.bind (rec [(FPName $ s2n "A", Embed $ Lam $ U.bind (FPName $ s2n "x") (Lit $ LObject $ Object (s2n "A") (s2n "A") [Var $ V (s2n "x") Prefix]))]) (Var $ V (s2n "A") Prefix)
 
 weirdProgram :: Either (ParseErrorBundle Text Void)
                        (Either (ParseErrorBundle TushTokenStream Void)
