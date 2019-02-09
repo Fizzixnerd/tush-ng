@@ -89,3 +89,6 @@ pPattern (PConstructor constructor subpats) = parens $ (pack $ name2String const
 pFlatPattern :: FlatPattern -> Text
 pFlatPattern (FPName n) = pack $ name2String n
 pFlatPattern (FPConstructor c names) = parens $ (pack $ name2String c) ++ " " ++ (concat $ intersperse " " (pack . name2String <$> names))
+
+pPlainName :: PlainName -> Text
+pPlainName (PlainName n) = pack $ name2String n

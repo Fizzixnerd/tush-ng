@@ -1,11 +1,14 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Language.Tush.Reduce where
 
 import Language.Tush.Types
 import Language.Tush.Pretty
+
+import Data.List.Index (imap)
 
 import Unbound.Generics.LocallyNameless
 import Unsafe.Coerce
@@ -15,6 +18,9 @@ import ClassyPrelude
 translateName :: Name a -> Name b
 translateName = unsafeCoerce
 
+preTypechecking :: Fresh m => Exp Pattern -> m (Exp FlatPattern)
+preTypechecking = flattenPatterns
+
 flattenPatterns :: Fresh m => Exp Pattern -> m (Exp FlatPattern)
 flattenPatterns (Var (V n f)) = return $ Var (V (translateName n) f)
 flattenPatterns (App e1 e2) = App <$> (flattenPatterns e1) <*> (flattenPatterns e2)
@@ -22,10 +28,10 @@ flattenPatterns (Lam b) = do
   (pat, body) <- unbind b
   body' <- flattenPatterns body
   case pat of
-    PName x -> do
-      return $ Lam $ bind (FPName $ translateName x) body'
-    c@PConstructor{} -> do
-      dummyVar <- fresh $ string2Name "x"
+    PName name -> do
+      return $ Lam $ bind (FPName $ translateName name) body'
+    c@(PConstructor consName _) -> do
+      dummyVar <- fresh $ s2n $ name2String consName ++ "'"
       flattenPatterns (Lam $ bind (PName dummyVar) (Let $ bind (rec [(c, Embed $ Var $ V dummyVar Prefix)]) body))
 flattenPatterns (Let bs) = do
   (pats, body) <- unbind bs
@@ -49,6 +55,58 @@ flattenPatterns (If cond tru fals) = do
   fals' <- flattenPatterns fals
   return $ If cond' tru' fals'
 flattenPatterns (Builtin b) = return $ Builtin b
+
+postTypeChecking :: Fresh m => Exp FlatPattern -> m (Exp PlainName)
+postTypeChecking = removePatterns
+
+removePatterns :: Fresh m => Exp FlatPattern -> m (Exp PlainName)
+removePatterns (Var (V n f)) = return $ Var (V (translateName n) f)
+removePatterns (App e1 e2) = App <$> (removePatterns e1) <*> (removePatterns e2)
+removePatterns (Lam b) = do
+  (pat, body) <- unbind b
+  body' <- removePatterns body
+  dummyVar <- friendlyDummy pat
+  let unsafeNthNames = unsafeNthify dummyVar pat
+  return $ Lam $ bind (PlainName dummyVar) (Let $ bind (rec unsafeNthNames) body')
+removePatterns (Let bs) = do
+  (pats, body) <- unbind bs
+  body' <- removePatterns body
+  let bindings = unrec pats
+      names = fmap translateName . flatPatternNames . fst <$> bindings
+  dummyBindings <- mapM (\((pat, Embed e), name) -> do
+                            dummy <- friendlyDummy pat
+                            e' <- removePatterns e
+                            return (dummy, Embed e')) (zip bindings names)
+  let dummyVars = fst <$> dummyBindings
+      unsafeNthNames = concat $ uncurry unsafeNthify <$> (zip dummyVars $ fst <$> bindings)
+  return $ Let $ bind (rec $ ((\(x, y) -> (PlainName x, y)) <$> dummyBindings) <> unsafeNthNames) body'
+removePatterns (Lit (LInt x)) = return (Lit (LInt x))
+removePatterns (Lit (LFloat x)) = return (Lit (LFloat x))
+removePatterns (Lit (LPath x)) = return (Lit (LPath x))
+removePatterns (Lit (LString x)) = return (Lit (LString x))
+removePatterns (Lit (LChar x)) = return (Lit (LChar x))
+removePatterns (Lit (LBool x)) = return (Lit (LBool x))
+removePatterns (Lit (LObject (Object ty tag contents))) = do
+  contents' <- mapM removePatterns contents
+  return $ Lit (LObject (Object ty (translateName tag) contents'))
+removePatterns (If cond tru fals) = do
+  cond' <- removePatterns cond
+  tru' <- removePatterns tru
+  fals' <- removePatterns fals
+  return $ If cond' tru' fals'
+removePatterns (Builtin b) = return $ Builtin b
+
+friendlyDummy :: Fresh m => FlatPattern -> m (Name (Exp p))
+friendlyDummy (FPName name) = fresh $ s2n $ name2String name ++ "'"
+friendlyDummy (FPConstructor consName _) = fresh $ s2n $ toLower $ name2String consName ++ "'"
+
+unsafeNthify :: Name (Exp p) -> FlatPattern -> [(PlainName, Embed (Exp p))]
+unsafeNthify dummyVar (FPConstructor _ names) = imap (\idx name -> (PlainName $ translateName name, Embed $ App (App (Builtin ONth) (Lit $ LInt $ fromIntegral idx)) (Var $ V dummyVar Prefix))) names
+unsafeNthify dummyVar (FPName name) = [(PlainName $ translateName name, Embed $ Var $ V dummyVar Prefix)]
+
+flatPatternNames :: FlatPattern -> [Name (Exp FlatPattern)]
+flatPatternNames (FPName n) = singleton n
+flatPatternNames (FPConstructor _ names) = names
 
 patternBindToFlattenedBinds :: Fresh m => (Pattern, Exp Pattern) -> m [(FlatPattern, Exp FlatPattern)]
 patternBindToFlattenedBinds (pat, e) = do

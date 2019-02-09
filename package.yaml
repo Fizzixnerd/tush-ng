@@ -28,6 +28,8 @@ dependencies:
 - vector
 - unbound-generics
 - transformers
+- hashable
+- ilist
 
 library:
   source-dirs: src

@@ -22,6 +22,7 @@ import GHC.Generics (Generic)
 import Control.Monad.Except
 import Control.Monad.State
 import qualified Data.Map as Map
+import qualified Data.Hashable as H
 import qualified Text.Megaparsec.Stream as Stream
 import Text.Megaparsec hiding (Token)
 import qualified Data.List.NonEmpty as NE
@@ -223,6 +224,7 @@ data Builtin
   | INeq
   | BNot
   | BXor
+  | ONth
   deriving (Eq, Show, Generic)
 
 instance Alpha Builtin
@@ -257,6 +259,14 @@ data FlatPattern = FPName (Name (Exp FlatPattern))
                  | FPConstructor (Name (Exp FlatPattern)) [Name (Exp FlatPattern)]
   deriving (Eq, Show, Generic)
 
+newtype PlainName = PlainName (Name (Exp PlainName))
+  deriving (Eq, Show, Generic)
+
+instance Alpha PlainName
+
+instance Hashable (Name (Exp FlatPattern))
+instance Hashable FlatPattern
+
 instance Alpha FlatPattern
 
 instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) (Exp p) where
@@ -265,6 +275,8 @@ instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) (Exp p) where
 instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) Pattern where
   isvar _ = Nothing
 instance Subst (Exp FlatPattern) FlatPattern where
+  isvar _ = Nothing
+instance Subst (Exp PlainName) PlainName where
   isvar _ = Nothing
 instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) (V (Exp p)) where
   isvar _ = Nothing

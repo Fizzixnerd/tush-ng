@@ -22,4 +22,4 @@ spec = parallel $ do
     it "runs a sample program" $ do
       runFile "tush/test.tush" `shouldReturn` (evaled $ Lit $ LInt 120)
     it "runs a program with recursive ADTs" $ do
-      runFile "tush/recursive_adts.tush" `shouldReturn` (evaled $ Lit $ LObject $ Object (s2n "Tree") (s2n "Node") [Lit $ LObject $ Object (s2n "Tree") (s2n "Leaf") [Lit $ LInt 4], Lit $ LObject $ Object (s2n "Tree") (s2n "Leaf") [Lit $ LInt 3]])
+      runFile "tush/recursive_adts.tush" `shouldReturn` (evaled $ Lit $ LObject $ Object (s2n "Tree") (s2n "Node") [Lit $ LObject $ Object (s2n "Tree") (s2n "Leaf") [Lit $ LInt 3], Lit $ LObject $ Object (s2n "Tree") (s2n "Leaf") [Lit $ LInt 4]])

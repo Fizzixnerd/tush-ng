@@ -195,6 +195,7 @@ infer e = case e of
     INeq -> return (TCon "Int" `TArr` TCon "Int" `TArr` TCon "Bool", [])
     BNot -> return (endo typeBool, [])
     BXor -> return (binary typeBool, [])
+    ONth -> error "unreachable: ONth should never occur before typechecking!"
   Var (V x _) -> do
     t <- lookupEnv x
     return (t, [])
@@ -207,7 +208,7 @@ infer e = case e of
           [(_, ty)] -> do
             tv <- instantiate ty
             return (tv `TArr` t, cs)
-          _ -> error "unreacheable"
+          _ -> error "unreacheable: You are binding a single name that has more than one type!"
       FPConstructor consName _ -> do
         consType <- unsafeLast . unArrow <$> lookupEnv consName
         return (consType `TArr` t, cs)
@@ -233,7 +234,7 @@ infer e = case e of
                   [(_, scheme)] -> do
                     varType <- instantiate scheme
                     return (patternTypes, bodyConstraints <> [Constraint (bodyType, varType)])
-                  _ -> error "unreachable"
+                  _ -> error "unreachable: You are binding a single name that has more than one type!"
               FPConstructor consName _ -> do
                 consValType <- lookupEnv consName
                 return $ (patternTypes, bodyConstraints <> [Constraint (bodyType, consValType)])) bindings
