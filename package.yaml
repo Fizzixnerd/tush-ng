@@ -30,6 +30,7 @@ dependencies:
 - transformers
 - hashable
 - ilist
+- hspec # for intero development
 
 library:
   source-dirs: src

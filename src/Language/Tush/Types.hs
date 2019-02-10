@@ -16,6 +16,7 @@ module Language.Tush.Types where
 import ClassyPrelude as CP hiding (TVar)
 
 import Unbound.Generics.LocallyNameless
+import Unsafe.Coerce
 
 import GHC.Generics (Generic)
 
@@ -24,9 +25,17 @@ import Control.Monad.State
 import qualified Data.Map as Map
 import qualified Data.Hashable as H
 import qualified Text.Megaparsec.Stream as Stream
-import Text.Megaparsec hiding (Token)
+import Text.Megaparsec hiding (Token, ParseError)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Vector as V
+import Data.Void
+
+data TushError = LexErr (ParseErrorBundle Text Void)
+               | ParseErr (ParseErrorBundle TushTokenStream Void)
+               | TypeErr (TypeError FlatPattern) (Exp FlatPattern)
+  deriving (Eq, Show)
+
+type Result a = Either TushError a
 
 -- * Syntax
 data Punctuation = Equals
@@ -249,25 +258,27 @@ data Object p = Object
 
 instance (Alpha p, Typeable p) => Alpha (Object p)
 
+newtype ConstructorName = ConstructorName { unConstructorName :: String }
+  deriving (Eq, Show, Generic)
+
+instance Alpha ConstructorName
+
 data Pattern = PName (Name (Exp Pattern))
-             | PConstructor (Name (Exp Pattern)) [Pattern]
+             | PConstructor ConstructorName [Pattern]
   deriving (Eq, Show, Generic)
 
 instance Alpha Pattern
 
 data FlatPattern = FPName (Name (Exp FlatPattern))
-                 | FPConstructor (Name (Exp FlatPattern)) [Name (Exp FlatPattern)]
+                 | FPConstructor ConstructorName [Name (Exp FlatPattern)]
   deriving (Eq, Show, Generic)
+
+instance Alpha FlatPattern
 
 newtype PlainName = PlainName (Name (Exp PlainName))
   deriving (Eq, Show, Generic)
 
 instance Alpha PlainName
-
-instance Hashable (Name (Exp FlatPattern))
-instance Hashable FlatPattern
-
-instance Alpha FlatPattern
 
 instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) (Exp p) where
   isvar (Var (V x _)) = Just (SubstName x)
@@ -275,6 +286,8 @@ instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) (Exp p) where
 instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) Pattern where
   isvar _ = Nothing
 instance Subst (Exp FlatPattern) FlatPattern where
+  isvar _ = Nothing
+instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) ConstructorName where
   isvar _ = Nothing
 instance Subst (Exp PlainName) PlainName where
   isvar _ = Nothing

@@ -162,8 +162,8 @@ inPattern (FPName name) action = do
   let scheme = Forall [] freshName
   result <- inEnv name scheme action
   return ([(name, scheme)], result)
-inPattern (FPConstructor consName names) action = do
-  consType <- lookupEnv consName
+inPattern (FPConstructor (ConstructorName consName) names) action = do
+  consType <- lookupEnv $ U.s2n consName
   env <- ask
   let nameTypePairs = zip names (generalize env <$> unArrow consType)
   result <- inEnv' nameTypePairs action
@@ -209,8 +209,8 @@ infer e = case e of
             tv <- instantiate ty
             return (tv `TArr` t, cs)
           _ -> error "unreacheable: You are binding a single name that has more than one type!"
-      FPConstructor consName _ -> do
-        consType <- unsafeLast . unArrow <$> lookupEnv consName
+      FPConstructor (ConstructorName consName) _ -> do
+        consType <- unsafeLast . unArrow <$> (lookupEnv $ U.s2n consName)
         return (consType `TArr` t, cs)
   App e1 e2 -> do
     (t1, c1) <- infer e1
@@ -220,10 +220,11 @@ infer e = case e of
   Let binds -> do
     (r, body) <- U.unbind binds
     let bindings = (\(x, U.Embed y) -> (x, y)) <$> U.unrec r
-    freshNames <- mapM (\name -> do
-                           env <- ask
-                           freshVar <- generalize env <$> fresh
-                           return (name, freshVar)) $ concat $ patternNames . fst <$> bindings
+        makeFreshType name = do
+          env <- ask
+          freshVar <- generalize env <$> fresh
+          return (name, freshVar)
+    freshNames <- mapM makeFreshType (concat $ patternNames . fst <$> bindings)
     inEnv' freshNames $ do
       constraintsAndPatternTypes <- mapM
         (\(pat, body_) -> do
@@ -235,14 +236,14 @@ infer e = case e of
                     varType <- instantiate scheme
                     return (patternTypes, bodyConstraints <> [Constraint (bodyType, varType)])
                   _ -> error "unreachable: You are binding a single name that has more than one type!"
-              FPConstructor consName _ -> do
-                consValType <- lookupEnv consName
+              FPConstructor (ConstructorName consName) _ -> do
+                consValType <- unsafeLast . unArrow <$> (lookupEnv $ U.s2n consName)
                 return $ (patternTypes, bodyConstraints <> [Constraint (bodyType, consValType)])) bindings
       let (types, constraints) = concat constraintsAndPatternTypes
       case runSolve constraints of
         Left err -> throwError err
         Right sub -> do
-          (t, c) <- inEnv' types $ local (apply sub) (infer body)
+          (t, c) <- local (apply sub) $ inEnv' types $ (infer body)
           return (t, c <> constraints)
   If cond tru fals -> do
     (t1, c1) <- infer cond

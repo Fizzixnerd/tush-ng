@@ -85,7 +85,7 @@ spec = parallel $ do
     it "parses multiple bindings" $ do
       parseTush letP "let x = 4; y = x in y" `shouldBe` (parsed $ Let (bind (rec [(PName $ string2Name "x", Embed $ Lit $ LInt 4), (PName $ string2Name "y", Embed $ Var $ V (string2Name "x") Prefix)]) (Var $ V (string2Name "y") Prefix)))
     it "parses a pattern let" $ do
-      parseTush letP "let (A x y) = foo in bar" `shouldBe` (parsed $ Let (bind (rec [((PConstructor (s2n "A") [PName $ s2n "x", PName $ s2n "y"]), Embed $ Var $ V (s2n "foo") Prefix)]) $ Var $ V (s2n "bar") Prefix))
+      parseTush letP "let (A x y) = foo in bar" `shouldBe` (parsed $ Let (bind (rec [((PConstructor (ConstructorName "A") [PName $ s2n "x", PName $ s2n "y"]), Embed $ Var $ V (s2n "foo") Prefix)]) $ Var $ V (s2n "bar") Prefix))
   describe "builtinP" $ do
     it "parses a builtin" $ do
       parseTush builtinP "builtin iadd" `shouldBe` (parsed $ Builtin IAdd)

@@ -38,7 +38,7 @@ step (Var _) = done
 step (Builtin _) = done
 step (App (Lam b) e2) = do
   (x, e1) <- unbind b
-  step $ Let (U.bind (rec [(x, Embed e2)]) e1)
+  return $ Let (U.bind (rec [(x, Embed e2)]) e1)
 step (App (App (Builtin b) (Lit (LInt x))) (Lit (LInt y))) = do
   case b of
     IAdd -> return $ Lit $ LInt (x + y)
@@ -88,6 +88,27 @@ tc f a = do
   case ma' of
     Just a' -> tc f a'
     Nothing -> return a
+
+showSteps :: Exp PlainName -> IO ()
+showSteps a = do
+  putStrLn $ runFreshM $ pExp pPlainName a
+  let ma' = runFreshM $ runMaybeT $ step a
+  case ma' of
+    Just a' -> do
+      showSteps a'
+    Nothing -> do
+      return ()
+
+showStepsRaw :: Exp PlainName -> IO ()
+showStepsRaw a = do
+  putStrLn $ tshow a
+  let ma' = runFreshM $ runMaybeT $ step a
+  case ma' of
+    Just a' -> do
+      showStepsRaw a'
+    Nothing -> do
+      return ()
+
 
 eval :: Exp PlainName -> Exp PlainName
 eval x = runFreshM (tc step x)

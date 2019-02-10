@@ -182,7 +182,7 @@ constructorP :: TushParser Pattern
 constructorP = parensP $ do
   constructor <- nameP
   pats <- many patternP
-  return $ PConstructor constructor pats
+  return $ PConstructor (ConstructorName $ name2String constructor) pats
 
 patternP :: TushParser Pattern
 patternP = PName <$> nameP <|> constructorP
@@ -192,7 +192,7 @@ letBindingP = do
   pat <- patternP
   void $ tokenP EqualsT
   binding <- expP
-  return (pat, embed binding)
+  return (pat, Embed binding)
 
 intP :: TushParser Integer
 intP = do
@@ -347,17 +347,12 @@ programP = Program <$> (sepEndBy defP (many $ tokenP NewlineT))
 
 parseTush :: TushParser p
           -> Text
-          -> Either (MP.ParseErrorBundle Text Void)
-                    (Either (MP.ParseErrorBundle TushTokenStream Void)
-                            p)
+          -> Result p
 parseTush p text_ = case MP.parse dTokensP "<tush>" text_ of
   Left e -> Left e
   Right x -> return $ runIdentity $ runReaderT (MP.runParserT (unTushParser p) "<tush tokens>" x) (TushReadState)
 
-parseFlatExpression :: Text
-                    -> Either (ParseErrorBundle Text Void)
-                              (Either (ParseErrorBundle TushTokenStream Void)
-                                      (Exp FlatPattern))
+parseFlatExpression :: Text -> Result (Exp FlatPattern)
 parseFlatExpression text_ = fmap (runFreshM . flattenPatterns) <$> (parseTush expP text_)
 
 testParseTush :: Text -> IO ()

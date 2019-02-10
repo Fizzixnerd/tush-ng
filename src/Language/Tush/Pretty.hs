@@ -62,9 +62,10 @@ pLit _ (LFloat f) = return $ tshow f
 pLit _ (LPath p) = return $ pPath p
 pLit _ (LString s) = return $ tshow s
 pLit _ (LChar c) = return $ tshow c
+pLit _ (LObject (Object _ name [])) = return $ pack $ name2String name
 pLit pp (LObject (Object _ name vals)) = do
   pVals <- concat . intersperse " " <$> (mapM (pExp pp) vals)
-  return $ (pack $ name2String name) ++ " " ++ pVals
+  return $ (pack $ name2String name) ++ " @ " ++ pVals
 
 pPath :: Path -> Text
 pPath (Path (bdy, pathType, fileType))
@@ -84,11 +85,11 @@ pBuiltin b = parens $ "builtin " ++ (toLower $ tshow b)
 
 pPattern :: Pattern -> Text
 pPattern (PName n) = pack $ name2String n
-pPattern (PConstructor constructor subpats) = parens $ (pack $ name2String constructor) ++ " " ++ (concat $ intersperse " " (pPattern <$> subpats))
+pPattern (PConstructor (ConstructorName c) subpats) = parens $ (pack c) ++ " " ++ (concat $ intersperse " " (pPattern <$> subpats))
 
 pFlatPattern :: FlatPattern -> Text
 pFlatPattern (FPName n) = pack $ name2String n
-pFlatPattern (FPConstructor c names) = parens $ (pack $ name2String c) ++ " " ++ (concat $ intersperse " " (pack . name2String <$> names))
+pFlatPattern (FPConstructor (ConstructorName c) names) = parens $ (pack c) ++ " " ++ (concat $ intersperse " " (pack . name2String <$> names))
 
 pPlainName :: PlainName -> Text
 pPlainName (PlainName n) = pack $ name2String n

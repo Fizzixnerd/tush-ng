@@ -30,8 +30,8 @@ flattenPatterns (Lam b) = do
   case pat of
     PName name -> do
       return $ Lam $ bind (FPName $ translateName name) body'
-    c@(PConstructor consName _) -> do
-      dummyVar <- fresh $ s2n $ name2String consName ++ "'"
+    c@(PConstructor (ConstructorName consName) _) -> do
+      dummyVar <- fresh $ s2n $ consName ++ "'"
       flattenPatterns (Lam $ bind (PName dummyVar) (Let $ bind (rec [(c, Embed $ Var $ V dummyVar Prefix)]) body))
 flattenPatterns (Let bs) = do
   (pats, body) <- unbind bs
@@ -66,20 +66,26 @@ removePatterns (Lam b) = do
   (pat, body) <- unbind b
   body' <- removePatterns body
   dummyVar <- friendlyDummy pat
-  let unsafeNthNames = unsafeNthify dummyVar pat
+  let unsafeNthNames = unsafeNthify (PlainName dummyVar) pat
   return $ Lam $ bind (PlainName dummyVar) (Let $ bind (rec unsafeNthNames) body')
 removePatterns (Let bs) = do
   (pats, body) <- unbind bs
   body' <- removePatterns body
   let bindings = unrec pats
-      names = fmap translateName . flatPatternNames . fst <$> bindings
-  dummyBindings <- mapM (\((pat, Embed e), name) -> do
-                            dummy <- friendlyDummy pat
-                            e' <- removePatterns e
-                            return (dummy, Embed e')) (zip bindings names)
-  let dummyVars = fst <$> dummyBindings
-      unsafeNthNames = concat $ uncurry unsafeNthify <$> (zip dummyVars $ fst <$> bindings)
-  return $ Let $ bind (rec $ ((\(x, y) -> (PlainName x, y)) <$> dummyBindings) <> unsafeNthNames) body'
+      makeDummyBind (pat, Embed e) = do
+        e' <- removePatterns e
+        case pat of
+          FPName n -> return $ Left (PlainName $ translateName n, Embed e')
+          FPConstructor (ConstructorName consName) _ -> do
+            dummy <- fresh $ s2n $ toLower $ consName ++ "'"
+            return $ Right (PlainName dummy, Embed e')
+  dummyBindings <- mapM makeDummyBind bindings
+  let dummyVars = fmap fst <$> dummyBindings
+      constructorBinds =  [x | Right x <- zipWith (\var bind_ -> do
+                                                      v <- var
+                                                      return (v, bind_)) dummyVars $ fst <$> bindings]
+      unsafeNthNames = concat $ uncurry unsafeNthify <$> constructorBinds
+  return $ Let $ bind (rec $ [x | Left x <- dummyBindings] <> [x | Right x <- dummyBindings] <> unsafeNthNames) body'
 removePatterns (Lit (LInt x)) = return (Lit (LInt x))
 removePatterns (Lit (LFloat x)) = return (Lit (LFloat x))
 removePatterns (Lit (LPath x)) = return (Lit (LPath x))
@@ -98,11 +104,11 @@ removePatterns (Builtin b) = return $ Builtin b
 
 friendlyDummy :: Fresh m => FlatPattern -> m (Name (Exp p))
 friendlyDummy (FPName name) = fresh $ s2n $ name2String name ++ "'"
-friendlyDummy (FPConstructor consName _) = fresh $ s2n $ toLower $ name2String consName ++ "'"
+friendlyDummy (FPConstructor (ConstructorName consName) _) = fresh $ s2n $ toLower $ consName ++ "'"
 
-unsafeNthify :: Name (Exp p) -> FlatPattern -> [(PlainName, Embed (Exp p))]
-unsafeNthify dummyVar (FPConstructor _ names) = imap (\idx name -> (PlainName $ translateName name, Embed $ App (App (Builtin ONth) (Lit $ LInt $ fromIntegral idx)) (Var $ V dummyVar Prefix))) names
-unsafeNthify dummyVar (FPName name) = [(PlainName $ translateName name, Embed $ Var $ V dummyVar Prefix)]
+unsafeNthify :: PlainName -> FlatPattern -> [(PlainName, Embed (Exp PlainName))]
+unsafeNthify (PlainName dummyVar) (FPConstructor _ names) = imap (\idx name -> (PlainName $ translateName name, Embed $ App (App (Builtin ONth) (Lit $ LInt $ fromIntegral idx)) (Var $ V dummyVar Prefix))) names
+unsafeNthify (PlainName dummyVar) (FPName name) = [(PlainName $ translateName name, Embed $ Var $ V dummyVar Prefix)]
 
 flatPatternNames :: FlatPattern -> [Name (Exp FlatPattern)]
 flatPatternNames (FPName n) = singleton n
@@ -113,27 +119,11 @@ patternBindToFlattenedBinds (pat, e) = do
   e' <- flattenPatterns e
   case pat of
     PName name -> return [(FPName $ translateName name, e')]
-    PConstructor conName pats -> do
+    PConstructor consName pats -> do
       dummyVars <- mapM (\case
                             PName x -> fresh $ string2Name $ name2String x ++ "'"
-                            PConstructor c _ -> fresh $ string2Name $ toLower $ name2String c) pats
+                            PConstructor (ConstructorName c) _ -> fresh $ s2n $ toLower c) pats
       let expressionizeVar name = Var $ V (translateName name) Prefix
           subpats = zip pats (expressionizeVar <$> dummyVars)
       rest <- mapM patternBindToFlattenedBinds subpats
-      return $ (FPConstructor (translateName conName) (translateName <$> dummyVars), e') : concat rest
-
-bindToTransform :: Fresh m => (Pattern, Exp Pattern) -> (Exp FlatPattern -> m (Exp FlatPattern))
-bindToTransform (pat, e) = \body -> do
-  e' <- flattenPatterns e
-  case pat of
-    PConstructor consName pats -> do
-      dummyVars <- forM pats $ \case
-        PName x -> fresh $ string2Name $ name2String x ++ "'"
-        PConstructor x _ -> fresh $ string2Name $ toLower $ name2String x
-      let expressionizeVar name = Var $ V (translateName name) Prefix
-          subpats = zip pats (expressionizeVar <$> dummyVars)
-          xform = foldl' (\acc subpat -> acc <=< (bindToTransform subpat)) return subpats
-      body' <- xform body
-      return $ Let $ bind (rec $ [(FPConstructor (translateName consName) dummyVars, Embed e')]) $ body'
-    PName name -> do
-      return $ Let $ bind (rec $ [(FPName $ translateName name, Embed e')]) body
+      return $ (FPConstructor consName dummyVars, e') : concat rest
