@@ -1,4 +1,6 @@
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Language.Tush.Program where
 
@@ -17,6 +19,7 @@ import Language.Tush.Pretty
 import Language.Tush.Eval
 import Language.Tush.Reduce
 import Language.Tush.Data
+import Language.Tush.Result
 import Language.TushNG
 
 programToExp :: Program Pattern -> Exp Pattern
@@ -37,99 +40,63 @@ programToEnv (Program defs)
 
 runFile :: MonadIO m =>
            FilePath
-        -> m (Either (ParseErrorBundle Text Void)
-                     (Either (ParseErrorBundle TushTokenStream Void)
-                             (Exp PlainName, Either (TypeError FlatPattern) Scheme)))
-runFile fp = do
-  result <- runFileM fp
-  return $ fmap runFreshM <$> result
+        -> m (Result (Exp PlainName, Scheme))
+runFile fp = runFreshM <$> runFileM fp
+
 
 runFileM :: (MonadIO m, Fresh f) =>
             FilePath
-         -> m (Either (ParseErrorBundle Text Void)
-                      (Either (ParseErrorBundle TushTokenStream Void)
-                             (f (Exp PlainName, Either (TypeError FlatPattern) Scheme))))
--- FIXME: Dear god.
-runFileM fp = fmap (fmap (fmap (fmap (\(e, t) -> (eval e, t))))) $ do
+         -> m (f (Result (Exp PlainName, Scheme)))
+runFileM fp = fmap (fmap (fmap (\(e, s) -> (eval e, s)))) $ do
   programText <- readFileUtf8 fp
   return $ programTushM programText
 
 programTush :: Text
-            -> (Either (ParseErrorBundle Text Void)
-                       (Either (ParseErrorBundle TushTokenStream Void)
-                               (Exp PlainName, Either (TypeError FlatPattern) Scheme)))
-programTush pt = fmap (\x -> (runFreshM $ (removePatterns =<< (flattenPatterns $ programToExp x)), checkProgram x)) <$> (parseTush programP pt)
+            -> Result (Exp PlainName, Scheme)
+programTush text_ = runFreshM $ programTushM text_
 
 programTushM :: Fresh m =>
                 Text
-             -> (Either (ParseErrorBundle Text Void)
-                        (Either (ParseErrorBundle TushTokenStream Void)
-                                (m (Exp PlainName, Either (TypeError FlatPattern) Scheme))))
-programTushM pt = do
-  lexed <- parseTush programP pt
+             -> m (Result (Exp PlainName, Scheme))
+programTushM text_ = do
+  let eProg = parseTush programP text_
+  eFlat <- sequence $ flattenPatterns . programToExp <$> eProg
+  ePlain <- sequence $ removePatterns <$> eFlat
+  eScheme <- join <$> (sequence $ checkProgramM <$> eProg)
   return $ do
-    parsed <- lexed
-    return $ do
-      let check = checkProgram parsed
-      ex <- removePatterns =<< (flattenPatterns $ programToExp parsed)
-      return (ex, check)
+    ex <- ePlain
+    sc <- eScheme
+    return (ex, sc)
 
-checkProgram :: Program Pattern -> Either (TypeError FlatPattern) Scheme
+checkProgram :: Program Pattern -> Result Scheme
 checkProgram p = inferExp mempty $ runFreshM $ flattenPatterns $ programToExp p
 
+checkProgramM :: Fresh m => Program Pattern -> m (Result Scheme)
+checkProgramM p = inferExp mempty <$> (flattenPatterns $ programToExp p)
+
 checkTushProgram :: Text
-                 -> Either (ParseErrorBundle Text Void)
-                           (Either (ParseErrorBundle TushTokenStream Void)
-                                   (Either (TypeError FlatPattern)
-                                            Scheme))
-checkTushProgram text_ = fmap (\x -> inferExp (programToEnv x) $ U.runFreshM $ flattenPatterns $ programToExp x) <$> (parseTush programP text_)
+                 -> Result Scheme
+checkTushProgram text_ = join $ (\x -> inferExp (programToEnv x) $ U.runFreshM $ flattenPatterns $ programToExp x) <$> (parseTush programP text_)
 
 testProgramTush :: MonadIO m => Text -> m ()
-testProgramTush text_ = case programTush text_ of
-  Left e -> putStr $ pack $ errorBundlePretty e
-  Right lexed -> case lexed of
-    Left e -> putStr $ pack $ errorBundlePretty e
-    Right (parsed, ty) -> case ty of
-      Left e -> do
-        print e
-        putStrLn $ runFreshM $ pExp pPlainName $ eval parsed
-      Right scheme -> do
-        putStrLn $ prettyPrintScheme scheme
-        putStrLn $ runFreshM $ pExp pPlainName $ eval parsed
+testProgramTush text_ = putStrLn $ prettyResult (\(e, s) -> prettyPrintScheme s ++ "\n" ++ runFreshM (pExp pPlainName e)) (programTush text_)
 
 simpleConstructor :: Exp FlatPattern
-simpleConstructor = Let $ U.bind (rec [(FPName $ s2n "A", Embed $ Lam $ U.bind (FPName $ s2n "x") (Lit $ LObject $ Object (s2n "A") (s2n "A") [Var $ V (s2n "x") Prefix]))]) (Var $ V (s2n "A") Prefix)
+simpleConstructor = Let $ U.bind (rec [(FPName $ s2n "A", Embed $ Lam $ U.bind (FPName $ s2n "x") (Lit $ LObject $ Object "A" (ConstructorName "A") [Var $ V (s2n "x") Prefix]))]) (Var $ V (s2n "A") Prefix)
 
 testStepTush :: Text -> IO ()
-testStepTush text_ = do
-  case programTush text_ of
-    Left e -> putStr $ pack $ errorBundlePretty e
-    Right lexed -> case lexed of
-      Left e -> putStr $ pack $ errorBundlePretty e
-      Right (parsed, ety) -> case ety of
-        Left e -> do
-          print e
-          showSteps parsed
-        Right ty -> do
-          putStrLn $ prettyPrintScheme ty
-          showSteps parsed
+testStepTush text_ = case programTush text_ of
+    Left e -> putStrLn $ prettyTushError e
+    Right (e, s) -> do
+      putStrLn $ prettyPrintScheme s
+      showSteps e
 
 testStepTushRaw :: Text -> IO ()
-testStepTushRaw text_ = do
-  case programTush text_ of
-    Left e -> putStr $ pack $ errorBundlePretty e
-    Right lexed -> case lexed of
-      Left e -> putStr $ pack $ errorBundlePretty e
-      Right (parsed, ety) -> case ety of
-        Left e -> do
-          print e
-          showStepsRaw parsed
-        Right ty -> do
-          putStrLn $ prettyPrintScheme ty
-          showStepsRaw parsed
+testStepTushRaw text_ = case programTush text_ of
+    Left e -> putStrLn $ prettyTushError e
+    Right (e, s) -> do
+      putStrLn $ prettyPrintScheme s
+      showStepsRaw e
 
-
-weirdProgram :: Either (ParseErrorBundle Text Void)
-                       (Either (ParseErrorBundle TushTokenStream Void)
-                               (Exp PlainName))
-weirdProgram = fmap (eval . runFreshM . (removePatterns <=< flattenPatterns) . programToExp) <$> (parseTush programP $ pack "fact = \\n -> if builtin ieql n 1 then 1 else builtin imul n (fact (builtin isub n 1))\n\nx = 5\n\nmain = fact x\n")
+factProgram :: Result (Exp PlainName)
+factProgram = (eval . runFreshM . (removePatterns <=< flattenPatterns) . programToExp) <$> (parseTush programP $ pack "fact = \\n -> if builtin ieql n 1 then 1 else builtin imul n (fact (builtin isub n 1))\n\nx = 5\n\nmain = fact x\n")

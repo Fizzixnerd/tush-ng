@@ -14,11 +14,13 @@ import Language.Tush.Parse
 import Language.Tush.Eval
 import Language.Tush.Program
 
-evaled = Right . Right
+evaled :: a -> Result a
+evaled = return
 
+runFile' :: MonadIO m => FilePath -> m (Result (Exp PlainName))
 runFile' x = do
   result <- runFile x
-  return $ fmap (fmap fst) result
+  return $ fst <$> result
 
 spec :: Spec
 spec = parallel $ do
@@ -26,11 +28,12 @@ spec = parallel $ do
     it "runs a sample program" $ do
       runFile' "tush/test.tush" `shouldReturn` (evaled $ Lit $ LInt 120)
     it "runs a program with recursive ADTs" $ do
-      aeqTest <- fmap runFreshM $ do
-        result <- runFileM "tush/recursive_adts.tush"
-        let expected = return $ evaled $ return $ Lit $ LObject $ Object (s2n "Tree") (s2n "Node") [Lit $ LObject $ Object (s2n "Tree") (s2n "Leaf") [Lit $ LInt 3], Lit $ LObject $ Object (s2n "Tree") (s2n "Leaf") [Lit $ LInt 4]]
-        (fmap $ uncurry (\x y -> do
-                            x' <- x
-                            y' <- y
-                            return $ aeq x' y')) <$> result expected
-      aeqTest `shouldReturn` True
+      let same = do
+            feExpScheme <- runFileM "tush/recursive_adts.tush"
+            return $ runFreshM $ do
+              eExpScheme <- feExpScheme
+              return $ do
+                (ex, _) <- eExpScheme
+                let expected = Lit $ LObject $ Object "Tree" (ConstructorName "Node") [Lit $ LObject $ Object "Tree" (ConstructorName "Leaf") [Lit $ LInt 3], Lit $ LObject $ Object "Tree" (ConstructorName "Leaf") [Lit $ LInt 4]]
+                return $ aeq ex expected
+      same `shouldReturn` (evaled $ True)

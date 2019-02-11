@@ -251,8 +251,8 @@ data Lit p
 instance (Alpha p, Typeable p) => Alpha (Lit p)
 
 data Object p = Object
-  { oType :: Name Type
-  , oTag :: Name (Exp p)
+  { oType :: String
+  , oTag :: ConstructorName
   , oContents :: [Exp p]
   } deriving (Eq, Show, Generic)
 

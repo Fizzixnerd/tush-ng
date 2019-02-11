@@ -11,6 +11,7 @@ import Language.Tush.Types as T
 import Language.Tush.Lex (dTokensP)
 import Language.Tush.Pretty
 import Language.Tush.Reduce
+import Language.Tush.Result
 
 import ClassyPrelude hiding (many, some, try)
 import Text.Megaparsec as MP hiding (satisfy)
@@ -18,6 +19,7 @@ import Data.Void
 import Data.Char
 
 import Control.Monad.Fail
+import Control.Monad.Except
 
 data TushReadState = TushReadState
 newtype TushParser a
@@ -349,17 +351,13 @@ parseTush :: TushParser p
           -> Text
           -> Result p
 parseTush p text_ = case MP.parse dTokensP "<tush>" text_ of
-  Left e -> Left e
-  Right x -> return $ runIdentity $ runReaderT (MP.runParserT (unTushParser p) "<tush tokens>" x) (TushReadState)
+  Left e -> throwError $ LexErr e
+  Right lexed -> case runIdentity $ runReaderT (MP.runParserT (unTushParser p) "<tush tokens>" lexed) (TushReadState) of
+    Left e -> throwError $ ParseErr e
+    Right parsed -> return parsed
 
 parseFlatExpression :: Text -> Result (Exp FlatPattern)
-parseFlatExpression text_ = fmap (runFreshM . flattenPatterns) <$> (parseTush expP text_)
+parseFlatExpression text_ = (runFreshM . flattenPatterns) <$> (parseTush expP text_)
 
 testParseTush :: Text -> IO ()
-testParseTush text_ = case parseTush expP text_ of
-  Left e -> putStr $ pack $ errorBundlePretty e
-  Right x -> case x of
-    Left e -> putStr $ pack $ errorBundlePretty e
-    Right y -> do
-      putStrLn $ tshow y
-      putStrLn $ runFreshM $ pExp pPattern y
+testParseTush text_ = putStrLn $ prettyResult (runFreshM . pExp pPattern) $ parseTush expP text_

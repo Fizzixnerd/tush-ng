@@ -9,7 +9,8 @@ import Unbound.Generics.LocallyNameless
 import Language.Tush.Types
 import Language.Tush.Parse
 
-parsed = Right . Right
+parsed :: a -> Result a
+parsed = Right
 
 spec :: Spec
 spec = parallel $ do

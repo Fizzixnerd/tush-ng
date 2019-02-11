@@ -1,18 +1,24 @@
+{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module EvalSpec where
 
 import Test.Hspec
 
+import ClassyPrelude
+
 import Language.Tush.Types
 import Language.Tush.Eval
 import Language.Tush.Program
 
-evaled = Right . Right
+evaled :: a -> Result a
+evaled = Right
 
+runFile' :: MonadIO m =>
+  FilePath -> m (Either TushError (Exp PlainName))
 runFile' x = do
   result <- runFile x
-  return $ fmap fst <$>result
+  return $ fst <$> result
 
 spec :: Spec
 spec = parallel $ do

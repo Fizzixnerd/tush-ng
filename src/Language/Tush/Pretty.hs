@@ -62,10 +62,10 @@ pLit _ (LFloat f) = return $ tshow f
 pLit _ (LPath p) = return $ pPath p
 pLit _ (LString s) = return $ tshow s
 pLit _ (LChar c) = return $ tshow c
-pLit _ (LObject (Object _ name [])) = return $ pack $ name2String name
-pLit pp (LObject (Object _ name vals)) = do
+pLit _ (LObject (Object _ (ConstructorName name) [])) = return $ pack name
+pLit pp (LObject (Object _ (ConstructorName name) vals)) = do
   pVals <- concat . intersperse " " <$> (mapM (pExp pp) vals)
-  return $ (pack $ name2String name) ++ " @ " ++ pVals
+  return $ pack name ++ " @ " ++ pVals
 
 pPath :: Path -> Text
 pPath (Path (bdy, pathType, fileType))

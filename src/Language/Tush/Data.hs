@@ -20,7 +20,7 @@ dataToLet (Data typeName products) = \e -> runFreshM $ do
     exps <- foldlM (\(accBdy, names) _ -> do
                        freshName <- fresh $ string2Name "x"
                        -- This reverses the arguments!
-                       return $ (\xs -> Lam (bind (PName freshName) (accBdy xs)), names <> [freshName])) (\xs -> (Lit $ LObject $ Object typeName tagName xs), []) types
+                       return $ (\xs -> Lam (bind (PName freshName) (accBdy xs)), names <> [freshName])) (\xs -> (Lit $ LObject $ Object (name2String typeName) (ConstructorName $ name2String tagName) xs), []) types
     return (exps, tagName)
   let productConstructors' = (\((f, ns), tagName) -> (PName tagName, Embed $ f $ reverse $ (\n' -> Var $ V n' Prefix) <$> ns)) <$> productConstructors
   return $ Let $ bind (rec productConstructors') e

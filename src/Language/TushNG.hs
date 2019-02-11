@@ -11,6 +11,7 @@ import qualified Unbound.Generics.LocallyNameless as U
 import Language.Tush.Types
 import Language.Tush.Parse
 import Language.Tush.Reduce
+import Language.Tush.Result
 
 import ClassyPrelude as CP hiding (TVar)
 
@@ -103,10 +104,10 @@ initInfer = InferState { count = 0 }
 runInfer :: Env p -> Infer p (Type, Vector Constraint) -> (Either (TypeError p) (Type, Vector Constraint))
 runInfer env (Infer m) = fst $ U.runFreshM $ runStateT (runReaderT (runExceptT m) env) initInfer
 
-inferExp :: Env FlatPattern -> Exp FlatPattern -> Either (TypeError FlatPattern) Scheme
-inferExp env e = do
-  (_, _, _, s) <- constraintsExp env e
-  return s
+inferExp :: Env FlatPattern -> Exp FlatPattern -> Result Scheme
+inferExp env e = case constraintsExp env e of
+  Right (_,_,_, s) -> return s
+  Left err -> throwError $ TypeErr err e
 
 constraintsExp :: Env FlatPattern -> Exp FlatPattern -> Either (TypeError FlatPattern) (Vector Constraint, Subst', Type, Scheme)
 constraintsExp env e = case runInfer env (infer e) of
@@ -183,7 +184,7 @@ infer e = case e of
   Lit (LChar _ ) -> return (typeChar, [])
   Lit (LString _) -> return (typeString, [])
   Lit (LObject (Object typeName _ _)) -> do
-    let consTy = TCon $ Name' $ pack $ U.name2String typeName
+    let consTy = TCon $ Name' $ pack typeName
     return (consTy, [])
   Builtin b -> case b of
     IAdd -> return (binary typeInt, [])
@@ -251,12 +252,12 @@ infer e = case e of
     (t3, c3) <- infer fals
     return (t2, c1 <> c2 <> c3 <> [Constraint (t1, typeBool), Constraint (t2, t3)])
 
-inferTop :: Env FlatPattern -> Vector (U.Name (Exp FlatPattern), (Exp FlatPattern)) -> Either (TypeError FlatPattern) (Env FlatPattern)
+inferTop :: Env FlatPattern -> Vector (U.Name (Exp FlatPattern), (Exp FlatPattern)) -> Result (Env FlatPattern)
 inferTop env xs = case uncons xs of
   Nothing -> Right env
-  Just ((name, e), rest) -> case inferExp env e of
-    Left err -> Left err
-    Right ty -> inferTop (extend env name ty) rest
+  Just ((name, e), rest) -> do
+    ty <- inferExp env e
+    inferTop (extend env name ty) rest
 
 normalize :: Scheme -> Scheme
 normalize (Forall _ body) = Forall (fmap snd ord) (normType body)
@@ -315,17 +316,16 @@ compose :: Subst' -> Subst' -> Subst'
 
 checkTush :: Env FlatPattern
           -> Text
-          -> Either (ParseErrorBundle Text Void)
-                    (Either (ParseErrorBundle TushTokenStream Void)
-                            (Either (TypeError FlatPattern)
-                                    Scheme))
-checkTush env text_ = fmap (inferExp env . U.runFreshM . flattenPatterns) <$> (parseTush expP text_)
+          -> Result (Scheme, Exp FlatPattern)
+checkTush env text_ =
+  let parsed = parseTush expP text_
+      flattened = U.runFreshM . flattenPatterns <$> parsed
+  in
+    case flattened of
+      Left e -> throwError e
+      Right f -> do
+        ty <- inferExp env f
+        return (ty, f)
 
 testCheckTush :: Env FlatPattern -> Text -> IO ()
-testCheckTush env text_ = case checkTush env text_ of
-  Left e -> putStr $ pack $ errorBundlePretty e
-  Right x -> case x of
-    Left e' -> putStr $ pack $ errorBundlePretty e'
-    Right y -> case y of
-      Left e'' -> print e''
-      Right z -> putStrLn $ prettyPrintScheme z
+testCheckTush env text_ = putStrLn $ prettyResult prettyPrintScheme $ fst <$> (checkTush env text_)

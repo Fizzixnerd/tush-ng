@@ -48,7 +48,7 @@ flattenPatterns (Lit (LChar x)) = return (Lit (LChar x))
 flattenPatterns (Lit (LBool x)) = return (Lit (LBool x))
 flattenPatterns (Lit (LObject (Object ty tag contents))) = do
   contents' <- mapM flattenPatterns contents
-  return $ Lit (LObject (Object ty (translateName tag) contents'))
+  return $ Lit (LObject (Object ty tag contents'))
 flattenPatterns (If cond tru fals) = do
   cond' <- flattenPatterns cond
   tru' <- flattenPatterns tru
@@ -94,7 +94,7 @@ removePatterns (Lit (LChar x)) = return (Lit (LChar x))
 removePatterns (Lit (LBool x)) = return (Lit (LBool x))
 removePatterns (Lit (LObject (Object ty tag contents))) = do
   contents' <- mapM removePatterns contents
-  return $ Lit (LObject (Object ty (translateName tag) contents'))
+  return $ Lit (LObject (Object ty tag contents'))
 removePatterns (If cond tru fals) = do
   cond' <- removePatterns cond
   tru' <- removePatterns tru

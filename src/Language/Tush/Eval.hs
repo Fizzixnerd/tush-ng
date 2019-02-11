@@ -15,6 +15,7 @@ import Language.Tush.Parse
 import Language.TushNG
 import Language.Tush.Pretty
 import Language.Tush.Reduce
+import Language.Tush.Result
 
 import ClassyPrelude
 
@@ -118,23 +119,8 @@ step1 x = case runFreshM $ runMaybeT $ step x of
   Nothing -> x
   Just y -> y
 
-evalTush :: Text -> Either (ParseErrorBundle Text Void)
-                           (Either (ParseErrorBundle TushTokenStream Void)
-                                   (Exp PlainName))
-evalTush text_ = fmap (eval . runFreshM . (removePatterns <=< flattenPatterns)) <$> (parseTush expP text_)
+evalTush :: Text -> Result (Exp PlainName)
+evalTush text_ = (eval . runFreshM . (removePatterns <=< flattenPatterns)) <$> (parseTush expP text_)
 
 testEvalTush :: Text -> IO ()
-testEvalTush text_ = case parseTush expP text_ of
-  Left e -> putStr $ pack $ errorBundlePretty e
-  Right lexed -> case lexed of
-    Left e -> putStr $ pack $ errorBundlePretty e
-    Right parsed ->
-      let flattened = runFreshM $ flattenPatterns parsed
-      in
-        case inferExp mempty flattened of
-          Left e -> do
-            print e
-            putStrLn $ runFreshM $ pExp pPlainName $ eval $ runFreshM $ removePatterns flattened
-          Right scheme -> do
-            putStrLn $ prettyPrintScheme scheme
-            putStrLn $ runFreshM $ pExp pPlainName $ eval $ runFreshM $ removePatterns flattened
+testEvalTush text_ = putStrLn $ prettyResult (runFreshM . pExp pPlainName) $ evalTush text_
