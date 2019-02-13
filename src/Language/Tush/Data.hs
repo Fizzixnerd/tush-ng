@@ -6,29 +6,22 @@ module Language.Tush.Data where
 import Language.Tush.Types
 import Language.Tush.Parse
 import Language.Tush.Eval
+import Language.Tush.Pretty
 import qualified Language.TushNG as NG
 
 import ClassyPrelude
 
 import Unbound.Generics.LocallyNameless
 
--- | Takes a Data and returns an Exp transformer that adds the constructors to
--- the lexical environment.
-dataToLet :: Data Pattern -> (Exp Pattern -> Exp Pattern)
-dataToLet (Data typeName products) = \e -> runFreshM $ do
-  productConstructors <- forM products $ \(DataProduct tagName types) -> do
-    exps <- foldlM (\(accBdy, names) _ -> do
-                       freshName <- fresh $ string2Name "x"
-                       -- This reverses the arguments!
-                       return $ (\xs -> Lam (bind (PName freshName) (accBdy xs)), names <> [freshName])) (\xs -> (Lit $ LObject $ Object (name2String typeName) (ConstructorName $ name2String tagName) xs), []) types
-    return (exps, tagName)
-  let productConstructors' = (\((f, ns), tagName) -> (PName tagName, Embed $ f $ reverse $ (\n' -> Var $ V n' Prefix) <$> ns)) <$> productConstructors
-  return $ Let $ bind (rec productConstructors') e
+dataToDataLet :: Data Pattern -> [(Name (Exp Pattern), Embed (Exp Pattern), Scheme)]
+dataToDataLet (Data dataType products) = productToDatEntry dataType <$> products
 
--- | Takes a Data and returns an Env transformer that adds the types of the
--- constructors to the Env.
-dataToEnv :: Data p -> (Env p -> Env p)
-dataToEnv (Data typeName products) = \env ->
-  let types = (\(DataProduct tagName dataTypes) -> (tagName, NG.generalize env $ foldl' (flip TArr) (TCon $ Name' $ name2String typeName) dataTypes)) <$> products
-  in
-    NG.extends env types
+productToDatEntry :: Type -> DataProduct Pattern -> (Name (Exp Pattern), Embed (Exp Pattern), Scheme)
+productToDatEntry t@(TCon (Name' dataType)) (DataProduct name types)
+  = let (toBody, varNames) = runFreshM $ foldM (\(accBdy, names) _ -> do
+                                                   freshName <- fresh $ string2Name "x"
+                                                   -- This reverses the arguments!
+                                                   return $ (\xs -> Lam (bind (PName freshName) (accBdy xs)), names <> [freshName])) (\xs -> (Lit $ LObject $ Object dataType (ConstructorName $ name2String name) xs), []) types
+    in
+      (name, Embed $ toBody $ (\n -> Var $ V n Prefix) <$> reverse varNames, Forall [] $ NG.arrow (types ++ [t]))
+productToDatEntry ty _ = terror $ "Cannot name a type '" ++ pType ty ++ "'."

@@ -93,3 +93,39 @@ pFlatPattern (FPConstructor (ConstructorName c) names) = parens $ (pack c) ++ " 
 
 pPlainName :: PlainName -> Text
 pPlainName (PlainName n) = pack $ name2String n
+
+pTypeError :: (Fresh m, Alpha p, Typeable p) => (p -> Text) -> TypeError p -> m Text
+pTypeError pp e = case e of
+  UnificationFail c -> do
+    constraint <- pConstraint pp c
+    return $ "Could not unify, in constraint: " ++ constraint
+  InfiniteType _ _ c -> do
+    constraint <- pConstraint pp c
+    return $ "Could not construct infinite type, in constraint: " ++ constraint
+  UnboundVariable name -> return $ "Unbound variable: " ++ (pack $ name2String name)
+  Ambiguous cs -> do
+    constraints <- sequence $ intersperse (return ", ") $ (pConstraint pp <$> cs)
+    return $ "Ambiguous type arising from constraints: " ++ concat constraints
+  UnificationMismatch p ty -> return $ "Unification mismatch: in pattern: " ++ pp p ++ " whose constructor has type: " ++ pType ty ++ ". Did you get the number of arguments right?"
+
+
+pConstraint :: (Fresh m, Alpha p, Typeable p) =>(p -> Text) -> Constraint p -> m Text
+pConstraint pp (Constraint ((t1, e1), (t2, e2)))
+  = do
+  let pt1 = pType t1
+  let pt2 = pType t2
+  pe1 <- pExp pp e1
+  pe2 <- pExp pp e2
+  return $ pt1 ++ " ~ " ++ pt2 ++ " [in expressions: " ++ pe1 ++ " and " ++ pe2 ++ "]"
+
+pType :: Type -> Text
+pType (TVar (TV x)) = pack x
+pType (TArr t1 t2) = "(" ++ pType t1 ++ " → " ++ pType t2 ++ ")"
+pType (TCon (Name' x)) = pack x
+
+pScheme :: Scheme -> Text
+pScheme (Forall tvs t)
+  = if null tvs
+    then pType t
+    else "∀ " ++ concat (intersperse ", " ((\(TV x) -> pack x) <$> tvs)) ++ ". " ++ pType t
+

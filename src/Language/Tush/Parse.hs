@@ -317,10 +317,10 @@ typeP = do
 dataP :: TushParser (Data Pattern)
 dataP = do
   void $ tokenP DataT
-  name <- nameP
+  tcon <- tconP
   void $ tokenP EqualsT
   products <- sepBy1 dataProductP (tokenP VBarT)
-  return $ Data name products
+  return $ Data tcon products
 
 dataProductP :: TushParser (DataProduct Pattern)
 dataProductP = do

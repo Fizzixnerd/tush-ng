@@ -56,10 +56,16 @@ step (App (App (Builtin ONth) (Lit (LInt n))) (Lit (LObject (Object _ _ xs)))) =
 step (App e1 e2) = App <$> step e1 <*> pure e2
                    <|> App <$> pure e1 <*> step e2
 step (Lam _) = done
-step (Let binds) = do
-  (r, body) <- unbind binds
-  let bindings = unrec r
-      unembededBindings = (\(PlainName x, Embed y) -> (x, Let $ U.bind r y)) <$> bindings
+step (Let bs) = do
+  (binds, body) <- unbind bs
+  let bindings = unrec binds
+      unembededBindings = (\(PlainName x, Embed y) -> (x, Let $ U.bind binds y)) <$> bindings
+      newBody = substs unembededBindings body
+  return newBody
+step (Dat bs) = do
+  (binds, body) <- unbind bs
+  let bindings = unrec binds
+      unembededBindings = (\(name, Embed rhs, _) -> (name, Dat $ U.bind binds rhs)) <$> bindings
       newBody = substs unembededBindings body
   return newBody
 step (Lit (LObject (Object ty consName es))) = do

@@ -34,6 +34,7 @@ spec = parallel $ do
               eExpScheme <- feExpScheme
               return $ do
                 (ex, _) <- eExpScheme
-                let expected = Lit $ LObject $ Object "Tree" (ConstructorName "Node") [Lit $ LObject $ Object "Tree" (ConstructorName "Leaf") [Lit $ LInt 3], Lit $ LObject $ Object "Tree" (ConstructorName "Leaf") [Lit $ LInt 4]]
-                return $ aeq ex expected
-      same `shouldReturn` (evaled $ True)
+
+                return ex
+      let expected = Lit $ LObject $ Object "Tree" (ConstructorName "Node") [Lit $ LObject $ Object "Tree" (ConstructorName "Leaf") [Lit $ LInt 3], Lit $ LObject $ Object "Tree" (ConstructorName "Leaf") [Lit $ LInt 4]]
+      same `shouldReturn` (evaled $ expected)

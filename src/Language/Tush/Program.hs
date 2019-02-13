@@ -25,24 +25,23 @@ import Language.TushNG
 programToExp :: Program Pattern -> Exp Pattern
 programToExp (Program defs)
   = let binds = [(PName x, y) | ValDef (x, y) <- defs]
-        dataBinds = foldl' (.) id (dataToLet <$> [d | DataDef d <- defs])
+        dataBinds = foldl' (++) [] (dataToDataLet <$> [d | DataDef d <- defs])
     in
-      dataBinds $ Let $ U.bind (rec binds) (Var (V (string2Name "main") Prefix))
+      Dat $ U.bind (rec dataBinds) $ Let $ U.bind (rec binds) (Var (V (string2Name "main") Prefix))
 
 translateEnv :: Env p -> Env q
 translateEnv = unsafeCoerce
 
-programToEnv :: Program p -> Env FlatPattern
-programToEnv (Program defs)
-  = let dataDefs = [d | DataDef d <- defs]
-    in
-     translateEnv $ foldl' (.) id (dataToEnv <$> dataDefs) $ mempty
+-- programToEnv :: Program p -> Env FlatPattern
+-- programToEnv (Program defs)
+--   = let dataDefs = [d | DataDef d <- defs]
+--     in
+--      translateEnv $ foldl' (.) id (dataToEnv <$> dataDefs) $ mempty
 
 runFile :: MonadIO m =>
            FilePath
         -> m (Result (Exp PlainName, Scheme))
 runFile fp = runFreshM <$> runFileM fp
-
 
 runFileM :: (MonadIO m, Fresh f) =>
             FilePath
@@ -76,10 +75,10 @@ checkProgramM p = inferExp mempty <$> (flattenPatterns $ programToExp p)
 
 checkTushProgram :: Text
                  -> Result Scheme
-checkTushProgram text_ = join $ (\x -> inferExp (programToEnv x) $ U.runFreshM $ flattenPatterns $ programToExp x) <$> (parseTush programP text_)
+checkTushProgram text_ = join $ (\x -> inferExp mempty $ U.runFreshM $ flattenPatterns $ programToExp x) <$> (parseTush programP text_)
 
 testProgramTush :: MonadIO m => Text -> m ()
-testProgramTush text_ = putStrLn $ prettyResult (\(e, s) -> prettyPrintScheme s ++ "\n" ++ runFreshM (pExp pPlainName e)) (programTush text_)
+testProgramTush text_ = putStrLn $ prettyResult (\(e, s) -> pScheme s ++ "\n" ++ runFreshM (pExp pPlainName e)) (programTush text_)
 
 simpleConstructor :: Exp FlatPattern
 simpleConstructor = Let $ U.bind (rec [(FPName $ s2n "A", Embed $ Lam $ U.bind (FPName $ s2n "x") (Lit $ LObject $ Object "A" (ConstructorName "A") [Var $ V (s2n "x") Prefix]))]) (Var $ V (s2n "A") Prefix)
@@ -88,14 +87,14 @@ testStepTush :: Text -> IO ()
 testStepTush text_ = case programTush text_ of
     Left e -> putStrLn $ prettyTushError e
     Right (e, s) -> do
-      putStrLn $ prettyPrintScheme s
+      putStrLn $ pScheme s
       showSteps e
 
 testStepTushRaw :: Text -> IO ()
 testStepTushRaw text_ = case programTush text_ of
     Left e -> putStrLn $ prettyTushError e
     Right (e, s) -> do
-      putStrLn $ prettyPrintScheme s
+      putStrLn $ pScheme s
       showStepsRaw e
 
 factProgram :: Result (Exp PlainName)

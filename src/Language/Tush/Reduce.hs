@@ -40,6 +40,14 @@ flattenPatterns (Let bs) = do
   let embeddedFlatBinds = (\(x, y) -> (x, Embed y)) <$> flatBinds
   flatBody <- flattenPatterns body
   return $ Let $ bind (rec embeddedFlatBinds) flatBody
+flattenPatterns (Dat bs) = do
+  (binds, body) <- unbind bs
+  body' <- flattenPatterns body
+  binds' <- mapM (\(name, Embed rhs, ty) -> do
+                     rhs' <- flattenPatterns rhs
+                     let name' = translateName name
+                     return (name', Embed rhs', ty)) $ unrec binds
+  return (Dat $ bind (rec binds') body')
 flattenPatterns (Lit (LInt x)) = return (Lit (LInt x))
 flattenPatterns (Lit (LFloat x)) = return (Lit (LFloat x))
 flattenPatterns (Lit (LPath x)) = return (Lit (LPath x))
@@ -86,6 +94,14 @@ removePatterns (Let bs) = do
                                                       return (v, bind_)) dummyVars $ fst <$> bindings]
       unsafeNthNames = concat $ uncurry unsafeNthify <$> constructorBinds
   return $ Let $ bind (rec $ [x | Left x <- dummyBindings] <> [x | Right x <- dummyBindings] <> unsafeNthNames) body'
+removePatterns (Dat bs) = do
+  (binds, body) <- unbind bs
+  body' <- removePatterns body
+  binds' <- mapM (\(name, Embed rhs, ty) -> do
+                     rhs' <- removePatterns rhs
+                     let name' = translateName name
+                     return (name', Embed rhs', ty)) $ unrec binds
+  return (Dat $ bind (rec binds') body')
 removePatterns (Lit (LInt x)) = return (Lit (LInt x))
 removePatterns (Lit (LFloat x)) = return (Lit (LFloat x))
 removePatterns (Lit (LPath x)) = return (Lit (LPath x))

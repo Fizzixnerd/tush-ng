@@ -192,7 +192,9 @@ data FileType = FTRegular | FTDirectory
 instance Alpha FileType
 
 newtype Name' = Name' { unName' :: String }
-  deriving (Eq, Ord, Show, IsString)
+  deriving (Eq, Ord, Show, IsString, Generic)
+
+instance Alpha Name'
 
 data Fixity' = Prefix | Infix | InfixBackticks
   deriving (Eq, Ord, Show, Generic)
@@ -216,12 +218,16 @@ data Exp p
   | App (Exp p) (Exp p)
   | Lam (Bind p (Exp p))
   | Let (Bind (Rec [(p, Embed (Exp p))]) (Exp p))
+  | Dat (Bind (Rec [(Name (Exp p), Embed (Exp p), Scheme)]) (Exp p))
   | Lit (Lit p)
   | If (Exp p) (Exp p) (Exp p)
   | Builtin Builtin
   deriving (Eq, Show, Generic)
 
 instance (Alpha p, Typeable p) => Alpha (Exp p)
+
+instance (Alpha p, Typeable p) => Eq (Bind (Rec [(Name (Exp p), Embed (Exp p), Scheme)]) (Exp p)) where
+  (==) = aeq
 
 data Builtin
   = IAdd
@@ -307,13 +313,21 @@ instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) Builtin where
   isvar _ = Nothing
 instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) (Object p) where
   isvar _ = Nothing
+instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) Scheme where
+  isvar _ = Nothing
+instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) TVar where
+  isvar _ = Nothing
+instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) Type where
+  isvar _ = Nothing
+instance (Alpha p, Subst (Exp p) p, Typeable p) => Subst (Exp p) Name' where
+  isvar _ = Nothing
 
 data Program p = Program [Def p]
   deriving (Eq, Show)
 
 data Data p = Data
-  { ddName :: Name Type
-  , ddProducts :: [DataProduct p]
+  { dName :: Type
+  , dProducts :: [DataProduct p]
   } deriving (Eq, Show)
 
 data DataProduct p = DataProduct
@@ -325,19 +339,25 @@ data Def p = ValDef (Name (Exp p), Embed (Exp p))
            | DataDef (Data p)
   deriving (Eq, Show)
 
-newtype TVar = TV Text
-  deriving (Eq, Ord, Show, IsString)
+newtype TVar = TV String
+  deriving (Eq, Ord, Show, IsString, Generic)
+
+instance Alpha TVar
 
 data Type
   = TVar TVar
   | TCon Name'
   | TArr Type Type
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Show, Generic)
+
+instance Alpha Type
 
 infixr `TArr`
 
 data Scheme = Forall [TVar] Type
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Show, Generic)
+
+instance Alpha Scheme
 
 newtype Infer p a
   = Infer { unInfer :: ExceptT (TypeError p) (ReaderT (Env p) (StateT InferState FreshM)) a }
@@ -354,15 +374,15 @@ data InferState = InferState { count :: Int }
   deriving (Eq, Ord, Show)
 
 data TypeError p
-  = UnificationFail Type Type
-  | InfiniteType TVar Type
+  = UnificationFail (Constraint p)
+  | InfiniteType TVar Type (Constraint p)
   | UnboundVariable (Name (Exp p))
-  | Ambiguous (Vector Constraint)
-  | UnificationMismatch (Vector Type) (Vector Type)
-  deriving (Eq, Ord, Show)
+  | Ambiguous (Vector (Constraint p))
+  | UnificationMismatch p Type
+  deriving (Eq, Show)
 
-newtype Constraint = Constraint { unConstraint :: (Type, Type) }
-  deriving (Eq, Ord, Show)
+newtype Constraint p = Constraint { unConstraint :: ((Type, Exp p), (Type, Exp p)) }
+  deriving (Eq, Show)
 
 newtype Env p = Env { unEnv :: Map (Name (Exp p)) Scheme }
   deriving (Eq, Show)
@@ -394,9 +414,9 @@ instance Substitutable Scheme where
     where s' = Subst' $ foldr Map.delete s as
   ftv (Forall as t) = ftv t \\ setFromList as
 
-instance Substitutable Constraint where
-   apply s (Constraint (t1, t2)) = Constraint (Language.Tush.Types.apply s t1, Language.Tush.Types.apply s t2)
-   ftv (Constraint (t1, t2)) = ftv t1 `CP.union` ftv t2
+instance Substitutable (Constraint p) where
+   apply s (Constraint ((t1, e1), (t2, e2))) = Constraint ((Language.Tush.Types.apply s t1, e1), (Language.Tush.Types.apply s t2, e2))
+   ftv (Constraint ((t1, _), (t2, _))) = ftv t1 `CP.union` ftv t2
 
 instance Substitutable a => Substitutable [a] where
   apply = fmap . Language.Tush.Types.apply
@@ -410,8 +430,8 @@ instance Substitutable (Env p) where
   apply s (Env env) = Env $ fmap (Language.Tush.Types.apply s) env
   ftv (Env env) = ftv $ Map.elems env
 
-newtype Unifier = Unifier { unUnifier :: (Subst', Vector Constraint) }
-  deriving (Eq, Ord, Show)
+newtype Unifier p = Unifier { unUnifier :: (Subst', Vector (Constraint p)) }
+  deriving (Eq, Show)
 
 newtype Solve p a = Solver { unSolve :: Except (TypeError p) a }
   deriving ( Functor
