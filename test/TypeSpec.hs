@@ -35,5 +35,9 @@ spec = do
       checkTush' "let x = 3 in x" `shouldBe` (checked $ concrete "Int")
     it "infers the type of a mutually recusive let" $ do
       checkTush' "let odd = \\x -> if builtin ieql (builtin irem x 2) 1 then True else builtin bnot (even x); even = \\x -> if builtin ieql (builtin irem x 2) 0 then True else builtin bnot (odd x) in odd" `shouldBe` (checked $ Forall [] $ TCon "Int" `TArr` TCon "Bool")
-    it "infers the type of a user defined data type" $ do
+    it "infers the type of a user-defined datatype" $ do
       checkTushProgram "data A = A Int\nmain = A 3" `shouldBe` (checked $ concrete "A")
+    it "infers the type of an unwrapped user-defined datatype" $ do
+      checkTushProgram "data A = A Int\nmain = let (A x) = A 3 in x" `shouldBe` (checked $ concrete "Int")
+    it "infers the type of an double-unwrapped user-defined datatype" $ do
+      checkTushProgram "data A = A B\ndata B = B Int\nmain = let (A (B x)) = A (B 3) in x" `shouldBe` (checked $ concrete "Int")

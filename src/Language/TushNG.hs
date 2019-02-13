@@ -3,6 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 module Language.TushNG where
 
@@ -149,21 +150,22 @@ generalize :: Env p -> Type -> Scheme
 generalize env t = Forall as t
   where as = toList $ ftv t \\ ftv env
 
-inPattern :: FlatPattern -> Infer FlatPattern a -> Infer FlatPattern ([(U.Name (Exp FlatPattern), Scheme)], a)
+inPattern :: FlatPattern -> Infer FlatPattern a -> Infer FlatPattern ([(U.Name (Exp FlatPattern), Type)], a)
 inPattern (FPName name) action = do
   freshName <- fresh
   let scheme = Forall [] freshName
   result <- inEnv name scheme action
-  return ([(name, scheme)], result)
+  return ([(name, freshName)], result)
 inPattern pat@(FPConstructor (ConstructorName consName) names) action = do
   consType <- lookupEnv $ U.s2n consName
   env <- ask
   let consTypes = unsafeInit $ unArrow consType
   if length names == length consTypes
     then do
-    let nameTypePairs = zip names (generalize env <$> consTypes)
+    let consSchemes = generalize env <$> consTypes
+        nameTypePairs = zip names consSchemes
     result <- inEnv' nameTypePairs action
-    return (nameTypePairs, result)
+    return (zip names consTypes, result)
     else throwError $ UnificationMismatch pat consType
 
 patternNames :: FlatPattern -> [U.Name (Exp FlatPattern)]
@@ -203,13 +205,12 @@ infer e = case e of
       FPName _ -> do
         case nameTypes of
           [(_, ty)] -> do
-            tv <- instantiate ty
-            return (tv `TArr` t, cs)
+            return (ty `TArr` t, cs)
           _ -> error "unreacheable: You are binding a single name that has more than one type!"
       FPConstructor (ConstructorName consName) _ -> do
         consType <- unsafeLast . unArrow <$> (lookupEnv $ U.s2n consName)
         return (consType `TArr` t, cs)
-  e@(App e1 e2) -> do
+  App e1 e2 -> do
     (t1, c1) <- infer e1
     (t2, c2) <- infer e2
     tv <- fresh
@@ -218,31 +219,38 @@ infer e = case e of
     (r, body) <- U.unbind binds
     let bindings = (\(x, U.Embed y) -> (x, y)) <$> U.unrec r
         makeFreshType name = do
-          env <- ask
-          freshVar <- generalize env <$> fresh
+          freshVar <- fresh
           return (name, freshVar)
+        generalizeFreshType env (n, t) = (n, generalize env t)
     freshNames <- mapM makeFreshType (concat $ patternNames . fst <$> bindings)
-    inEnv' freshNames $ do
+    env <- ask
+    let generalizedFreshNames = generalizeFreshType env <$> freshNames
+    inEnv' generalizedFreshNames $ do
       constraintsAndPatternTypes <- mapM
-        (\(pat, body_) -> do
-            (patternTypes, (bodyType, bodyConstraints)) <- inPattern pat (infer body_)
-            case pat of
-              FPName _ -> do
-                case patternTypes of
-                  [(name, scheme)] -> do
-                    varType <- instantiate scheme
-                    return (patternTypes, bodyConstraints <> [Constraint ((bodyType, body), (varType, Var $ V name Prefix))])
-                  _ -> error "unreachable: You are binding a single name that has more than one type!"
-              FPConstructor (ConstructorName consName) _ -> do
-                consValType <- unsafeLast . unArrow <$> (lookupEnv $ U.s2n consName)
-                let constraints = bodyConstraints <> [Constraint ((bodyType, body), (consValType, Var $ V (U.s2n consName) Prefix))]
-                return $ (patternTypes, constraints)) bindings
-      let (types, constraints) = concat constraintsAndPatternTypes
+          (\(pat, body_) -> do
+              (patternTypes, (bodyType, bodyConstraints)) <- inPattern pat (infer body_)
+              env' <- ask
+              inEnv' (generalizeFreshType env' <$> patternTypes) $ case pat of
+                FPName name -> do
+                  varType <- lookupEnv name
+                  return (patternTypes, bodyConstraints <> [Constraint ((bodyType, body), (varType, Var $ V name Prefix))])
+                FPConstructor (ConstructorName consName) _ -> do
+                  consTypes <- unArrow <$> (lookupEnv $ U.s2n consName)
+                  let consValType = unsafeLast consTypes
+                      constraints = bodyConstraints <> [Constraint ((bodyType, body), (consValType, Var $ V (U.s2n consName) Prefix))]
+                  return $ (patternTypes, constraints)) bindings
+      let (types, bodyConstraints) = concat constraintsAndPatternTypes
+          consConstraints = zipWith (\(name1, t1) (name2, t2) -> Constraint ((t1, Var $ V name1 Prefix), (t2, Var $ V name2 Prefix))) freshNames freshNames
+      let constraints = bodyConstraints <> fromList consConstraints
       case runSolve constraints of
         Left err -> throwError err
         Right sub -> do
-          (t, c) <- local (apply sub) $ inEnv' types $ (infer body)
+          env'' <- ask
+          (t, c) <- local (apply sub) $ inEnv' (generalizeFreshType env'' <$> types) $ (infer body)
           let c' = c <> constraints
+          traceM $ unpack $ unlines $ U.runFreshM . pConstraint pFlatPattern <$> c'
+          traceM $ unpack $ pType t
+          traceM $ unpack $ U.runFreshM $ pExp pFlatPattern body
           return (t, c')
   Dat bs -> do
     (binds, body) <- U.unbind bs

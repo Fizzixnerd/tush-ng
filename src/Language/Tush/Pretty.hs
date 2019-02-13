@@ -43,11 +43,20 @@ pExp pp (Lam b) = do
 pExp pp (Let binds) = do
   (r, body) <- unbind binds
   let bindings = unrec r
-  pBindings <- concat . intersperse "; " <$> (mapM (\(p, Embed e) -> do
-                                                       e' <- pExp pp e
-                                                       return $ pp p ++ " = " ++ e') bindings)
+  pBindings <- intercalate "; " <$> (mapM (\(p, Embed e) -> do
+                                              e' <- pExp pp e
+                                              return $ pp p ++ " = " ++ e') bindings)
   pBody <- pExp pp body
   return $ parens $ "let " ++ pBindings ++ " in " ++ pBody
+pExp pp (Dat binds) = do
+  (r, body) <- unbind binds
+  let bindings = unrec r
+  pBindings <- intercalate "; " <$> (mapM (\(name, Embed e, _) -> do
+                                              e' <- pExp pp e
+                                              return $ (pack $ name2String name) ++ " = " ++ e') bindings)
+  pBody <- pExp pp body
+  return $ parens $ "datalet " ++ pBindings ++ " in " ++ pBody
+
 pExp pp (Lit l) = pLit pp l
 pExp pp (If cond tru fals) = do
   pc <- pExp pp cond
@@ -64,7 +73,7 @@ pLit _ (LString s) = return $ tshow s
 pLit _ (LChar c) = return $ tshow c
 pLit _ (LObject (Object _ (ConstructorName name) [])) = return $ pack name
 pLit pp (LObject (Object _ (ConstructorName name) vals)) = do
-  pVals <- concat . intersperse " " <$> (mapM (pExp pp) vals)
+  pVals <- intercalate " " <$> (mapM (pExp pp) vals)
   return $ pack name ++ " @ " ++ pVals
 
 pPath :: Path -> Text
@@ -78,18 +87,18 @@ pPath (Path (bdy, pathType, fileType))
           FTRegular -> ""
           FTDirectory -> "/"
     in
-      pack $ prefix ++ "/" ++ (concat $ intersperse "/" bdy) ++ postfix
+      pack $ prefix ++ "/" ++ (intercalate "/" bdy) ++ postfix
 
 pBuiltin :: Builtin -> Text
 pBuiltin b = parens $ "builtin " ++ (toLower $ tshow b)
 
 pPattern :: Pattern -> Text
 pPattern (PName n) = pack $ name2String n
-pPattern (PConstructor (ConstructorName c) subpats) = parens $ (pack c) ++ " " ++ (concat $ intersperse " " (pPattern <$> subpats))
+pPattern (PConstructor (ConstructorName c) subpats) = parens $ (pack c) ++ " " ++ (intercalate " " (pPattern <$> subpats))
 
 pFlatPattern :: FlatPattern -> Text
 pFlatPattern (FPName n) = pack $ name2String n
-pFlatPattern (FPConstructor (ConstructorName c) names) = parens $ (pack c) ++ " " ++ (concat $ intersperse " " (pack . name2String <$> names))
+pFlatPattern (FPConstructor (ConstructorName c) names) = parens $ (pack c) ++ " " ++ (intercalate " " (pack . name2String <$> names))
 
 pPlainName :: PlainName -> Text
 pPlainName (PlainName n) = pack $ name2String n
@@ -127,5 +136,5 @@ pScheme :: Scheme -> Text
 pScheme (Forall tvs t)
   = if null tvs
     then pType t
-    else "∀ " ++ concat (intersperse ", " ((\(TV x) -> pack x) <$> tvs)) ++ ". " ++ pType t
+    else "∀ " ++ (intercalate ", " ((\(TV x) -> pack x) <$> tvs)) ++ ". " ++ pType t
 
