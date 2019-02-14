@@ -50,6 +50,7 @@ runFileM fp = fmap (fmap (fmap (\(e, s) -> (eval e, s)))) $ do
   programText <- readFileUtf8 fp
   return $ programTushM programText
 
+
 programTush :: Text
             -> Result (Exp PlainName, Scheme)
 programTush text_ = runFreshM $ programTushM text_

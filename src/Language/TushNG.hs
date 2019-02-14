@@ -3,7 +3,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE FlexibleContexts #-}
 
 module Language.TushNG where
 
@@ -150,12 +149,12 @@ generalize :: Env p -> Type -> Scheme
 generalize env t = Forall as t
   where as = toList $ ftv t \\ ftv env
 
-inPattern :: FlatPattern -> Infer FlatPattern a -> Infer FlatPattern ([(U.Name (Exp FlatPattern), Type)], a)
+inPattern :: FlatPattern -> Infer FlatPattern a -> Infer FlatPattern a
 inPattern (FPName name) action = do
   freshName <- fresh
   let scheme = Forall [] freshName
   result <- inEnv name scheme action
-  return ([(name, freshName)], result)
+  return result
 inPattern pat@(FPConstructor (ConstructorName consName) names) action = do
   consType <- lookupEnv $ U.s2n consName
   env <- ask
@@ -165,7 +164,7 @@ inPattern pat@(FPConstructor (ConstructorName consName) names) action = do
     let consSchemes = generalize env <$> consTypes
         nameTypePairs = zip names consSchemes
     result <- inEnv' nameTypePairs action
-    return (zip names consTypes, result)
+    return result
     else throwError $ UnificationMismatch pat consType
 
 patternNames :: FlatPattern -> [U.Name (Exp FlatPattern)]
@@ -200,16 +199,15 @@ infer e = case e of
     return (t, [])
   Lam b -> do
     (pat, e') <- U.unbind b
-    (nameTypes, (t, cs)) <- inPattern pat (infer e')
-    case pat of
-      FPName _ -> do
-        case nameTypes of
-          [(_, ty)] -> do
-            return (ty `TArr` t, cs)
-          _ -> error "unreacheable: You are binding a single name that has more than one type!"
-      FPConstructor (ConstructorName consName) _ -> do
-        consType <- unsafeLast . unArrow <$> (lookupEnv $ U.s2n consName)
-        return (consType `TArr` t, cs)
+    inPattern pat $ do
+      (bodyType, bodyConstraints) <- (infer e')
+      case pat of
+        FPName name -> do
+          tv <- lookupEnv name
+          return (tv `TArr` bodyType, bodyConstraints)
+        FPConstructor (ConstructorName consName) _ -> do
+          consType <- unsafeLast . unArrow <$> (lookupEnv $ U.s2n consName)
+          return (consType `TArr` bodyType, bodyConstraints)
   App e1 e2 -> do
     (t1, c1) <- infer e1
     (t2, c2) <- infer e2
@@ -221,37 +219,20 @@ infer e = case e of
         makeFreshType name = do
           freshVar <- fresh
           return (name, freshVar)
-        generalizeFreshType env (n, t) = (n, generalize env t)
     freshNames <- mapM makeFreshType (concat $ patternNames . fst <$> bindings)
-    env <- ask
-    let generalizedFreshNames = generalizeFreshType env <$> freshNames
+    generalizedFreshNames <- mapM (\(n, t) -> do
+                                      env <- ask
+                                      return (n, generalize env t)) freshNames
     inEnv' generalizedFreshNames $ do
-      constraintsAndPatternTypes <- mapM
-          (\(pat, body_) -> do
-              (patternTypes, (bodyType, bodyConstraints)) <- inPattern pat (infer body_)
-              env' <- ask
-              inEnv' (generalizeFreshType env' <$> patternTypes) $ case pat of
-                FPName name -> do
-                  varType <- lookupEnv name
-                  return (patternTypes, bodyConstraints <> [Constraint ((bodyType, body), (varType, Var $ V name Prefix))])
-                FPConstructor (ConstructorName consName) _ -> do
-                  consTypes <- unArrow <$> (lookupEnv $ U.s2n consName)
-                  let consValType = unsafeLast consTypes
-                      constraints = bodyConstraints <> [Constraint ((bodyType, body), (consValType, Var $ V (U.s2n consName) Prefix))]
-                  return $ (patternTypes, constraints)) bindings
-      let (types, bodyConstraints) = concat constraintsAndPatternTypes
-          consConstraints = zipWith (\(name1, t1) (name2, t2) -> Constraint ((t1, Var $ V name1 Prefix), (t2, Var $ V name2 Prefix))) freshNames freshNames
-      let constraints = bodyConstraints <> fromList consConstraints
-      case runSolve constraints of
-        Left err -> throwError err
-        Right sub -> do
-          env'' <- ask
-          (t, c) <- local (apply sub) $ inEnv' (generalizeFreshType env'' <$> types) $ (infer body)
-          let c' = c <> constraints
-          traceM $ unpack $ unlines $ U.runFreshM . pConstraint pFlatPattern <$> c'
-          traceM $ unpack $ pType t
-          traceM $ unpack $ U.runFreshM $ pExp pFlatPattern body
-          return (t, c')
+      env <- ask
+      (env', patConstraints) <- CP.foldM patternConstraints (env, []) bindings
+      local (const env') $ do
+        case runSolve patConstraints of
+          Left err -> throwError err
+          Right sub -> do
+            (bodyType, bodyConstraints) <- local (apply sub) (infer body)
+            let constraints = bodyConstraints <> patConstraints
+            return (bodyType, constraints)
   Dat bs -> do
     (binds, body) <- U.unbind bs
     inEnv' ((\(name, _, scheme) -> (name, scheme)) <$> U.unrec binds) (infer body)
@@ -260,6 +241,25 @@ infer e = case e of
     (t2, c2) <- infer tru
     (t3, c3) <- infer fals
     return (t2, c1 <> c2 <> c3 <> [Constraint ((t1, cond), (typeBool, e)), Constraint ((t2, tru), (t3, fals))])
+
+patternConstraints :: (Env FlatPattern, Vector (Constraint FlatPattern))
+                   -> (FlatPattern, Exp FlatPattern)
+                   -> Infer FlatPattern (Env FlatPattern, Vector (Constraint FlatPattern))
+patternConstraints (env, cs) (pat, e) = local (const env) $ inPattern pat $ do
+  (rhsType, rhsConstraints) <- infer e
+  case pat of
+    FPName name -> do
+      varType <- lookupEnv name
+      newEnv <- ask
+      return (newEnv, cs <> rhsConstraints <> [Constraint ((rhsType, e), (varType, Var $ V name Prefix))])
+    FPConstructor (ConstructorName consName) names -> do
+      consTypes <- unArrow <$> (lookupEnv $ U.s2n consName)
+      let consValType = unsafeLast consTypes
+          constraints = cs
+                        <> rhsConstraints
+                        <> [Constraint ((rhsType, e), (consValType, Var $ V (U.s2n $ consName ++ " @ ") Prefix))]
+      newEnv <- ask
+      return (newEnv, constraints)
 
 inferTop :: Env FlatPattern -> Vector (U.Name (Exp FlatPattern), (Exp FlatPattern)) -> Result (Env FlatPattern)
 inferTop env xs = case uncons xs of
